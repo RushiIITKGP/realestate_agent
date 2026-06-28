@@ -47,11 +47,13 @@ def test_property_keyword_search(client):
     assert len(data) >= 1
 
 
-def test_chat_requires_openai_key(client, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "")
+def test_chat_requires_google_api_key(client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    from app.agent.graph import get_compiled_agent
     from app.config import get_settings
 
     get_settings.cache_clear()
+    get_compiled_agent.cache_clear()
 
     response = client.post(
         "/chat",
@@ -60,3 +62,4 @@ def test_chat_requires_openai_key(client, monkeypatch):
     assert response.status_code == 503
 
     get_settings.cache_clear()
+    get_compiled_agent.cache_clear()

@@ -10,8 +10,14 @@ class Settings(BaseSettings):
     debug: bool = True
     database_url: str = "sqlite:///./data/realestate.db"
     checkpoint_db_url: str = "sqlite:///./data/checkpoints.db"
-    openai_api_key: str | None = None
-    openai_chat_model: str = "gpt-4o-mini"
+
+    google_api_key: str | None = None
+    llm_model: str = "gemini-3.1-flash-lite-preview"
+    llm_temperature: float = 0.7
+
+    @property
+    def llm_configured(self) -> bool:
+        return bool(self.google_api_key)
 
 
 @lru_cache

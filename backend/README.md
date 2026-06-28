@@ -13,7 +13,7 @@ Implements **Phases 1–4** from [PROCESS_DIAGRAMS.md](../PROCESS_DIAGRAMS.md):
 
 - FastAPI
 - SQLAlchemy + SQLite (PostgreSQL-ready)
-- LangGraph + LangChain + OpenAI
+- LangGraph + LangChain + Google Gemini
 - Alembic
 
 ## Quick start
@@ -24,7 +24,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# Add your OPENAI_API_KEY to .env
+# Add your GOOGLE_API_KEY to .env
 
 uvicorn app.main:app --reload
 ```
@@ -132,8 +132,9 @@ pytest
 |---|---|
 | `DATABASE_URL` | SQLite or PostgreSQL connection string |
 | `CHECKPOINT_DB_URL` | LangGraph conversation memory DB |
-| `OPENAI_API_KEY` | Required for `/chat` |
-| `OPENAI_CHAT_MODEL` | Default: `gpt-4o-mini` |
+| `GOOGLE_API_KEY` | Required for `/chat` |
+| `LLM_MODEL` | Default: `gemini-3.1-flash-lite-preview` |
+| `LLM_TEMPERATURE` | Default: `0.7` |
 
 ## Next phases
 

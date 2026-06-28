@@ -23,13 +23,5 @@ def get_checkpointer() -> SqliteSaver:
 
 @lru_cache
 def get_compiled_agent():
-    from langchain_openai import ChatOpenAI
-
-    settings = get_settings()
-    model = ChatOpenAI(
-        model=settings.openai_chat_model,
-        api_key=settings.openai_api_key,
-        temperature=0.2,
-    )
-    graph = build_agent_graph(model)
+    graph = build_agent_graph(get_llm())
     return graph.compile(checkpointer=get_checkpointer())

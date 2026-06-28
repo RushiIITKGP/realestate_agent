@@ -21,9 +21,9 @@ class ChatService:
 
     def chat(self, session_id: str, message: str) -> ChatResponse:
         settings = get_settings()
-        if not settings.openai_api_key:
+        if not settings.llm_configured:
             raise ChatServiceError(
-                "OPENAI_API_KEY is not configured. Copy backend/.env.example to backend/.env.",
+                "GOOGLE_API_KEY is not configured. Copy backend/.env.example to backend/.env.",
                 status_code=503,
             )
 
