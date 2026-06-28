@@ -3,6 +3,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from app.agent.llm import get_llm
 from app.agent.tools import build_agent_graph
 from app.config import get_settings
 
