@@ -47,11 +47,6 @@ def main() -> None:
                     )
                 print()
 
-            if payload.get("preferences"):
-                prefs = {k: v for k, v in payload["preferences"].items() if v is not None}
-                if prefs:
-                    print(f"Saved preferences: {prefs}\n")
-
 
 if __name__ == "__main__":
     main()

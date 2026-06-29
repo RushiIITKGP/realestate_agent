@@ -94,16 +94,16 @@ Search uses **SQL filters + keyword matching** (no embeddings yet — Phase 6).
 ```
 backend/
   app/
-    main.py              # FastAPI app
-    api/routes/          # REST endpoints
-    agent/               # LangGraph graph, tools, prompts
-    db/                  # SQLAlchemy session
-    models/              # Property, Neighborhood
-    schemas/             # Pydantic models
-    services/            # Search + chat services
-    seed/                # Mock data
-  alembic/               # Migrations
-  scripts/cli_chat.py    # Multi-turn CLI tester
+    main.py                 # FastAPI app
+    api/routes/             # REST endpoints (health, properties, chat)
+    agent/agent.py          # ★ LLM + tools + agent + run_chat() — start here
+    db/                     # SQLAlchemy session
+    models/                 # Property, Neighborhood
+    schemas/                # Pydantic request/response models
+    services/properties.py  # DB search functions
+    seed/                   # Mock data
+  alembic/
+  scripts/cli_chat.py
   tests/
 ```
 

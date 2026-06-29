@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.property import PropertyDetail, PropertySearchParams, PropertySummary
-from app.services.property_search import PropertySearchService
+from app.services import properties as property_db
 
 router = APIRouter(prefix="/properties", tags=["properties"])
 
@@ -38,14 +38,12 @@ def list_properties(
         keywords=keywords,
         limit=limit,
     )
-    service = PropertySearchService(db)
-    return service.search(params)
+    return property_db.search(db, params)
 
 
 @router.get("/{property_id}", response_model=PropertyDetail)
 def get_property(property_id: str, db: Session = Depends(get_db)) -> PropertyDetail:
-    service = PropertySearchService(db)
-    property_obj = service.get_by_id(property_id)
-    if property_obj is None:
+    prop = property_db.get_by_id(db, property_id)
+    if prop is None:
         raise HTTPException(status_code=404, detail="Property not found")
-    return property_obj
+    return prop
