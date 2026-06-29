@@ -21,6 +21,10 @@ def list_properties(
     min_school_rating: int | None = Query(default=None, ge=1, le=10),
     min_walk_score: int | None = Query(default=None, ge=0, le=100),
     keywords: str | None = None,
+    semantic_query: str | None = Query(
+        default=None,
+        description="Natural language search, e.g. 'cozy family home with backyard'",
+    ),
     limit: int = Query(default=10, ge=1, le=50),
     db: Session = Depends(get_db),
 ) -> list[PropertySummary]:
@@ -36,9 +40,23 @@ def list_properties(
         min_school_rating=min_school_rating,
         min_walk_score=min_walk_score,
         keywords=keywords,
+        semantic_query=semantic_query,
         limit=limit,
     )
     return property_db.search(db, params)
+
+
+@router.get("/{property_id}/similar", response_model=list[PropertySummary])
+def similar_properties(
+    property_id: str,
+    limit: int = Query(default=5, ge=1, le=20),
+    max_price: int | None = Query(default=None, ge=0),
+    db: Session = Depends(get_db),
+) -> list[PropertySummary]:
+    source = property_db.get_by_id(db, property_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return property_db.find_similar(db, property_id, limit=limit, max_price=max_price)
 
 
 @router.get("/{property_id}", response_model=PropertyDetail)

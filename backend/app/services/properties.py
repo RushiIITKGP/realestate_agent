@@ -1,14 +1,15 @@
+import math
+
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import Neighborhood, Property
 from app.models.property import PropertyType
 from app.schemas.property import PropertySearchParams
 
 
-def search(db: Session, params: PropertySearchParams) -> list[Property]:
-    query = select(Property)
-
+def _apply_filters(query, params: PropertySearchParams):
     if params.city:
         query = query.where(func.lower(Property.city) == params.city.lower())
     if params.state:
@@ -30,8 +31,9 @@ def search(db: Session, params: PropertySearchParams) -> list[Property]:
     if params.min_walk_score is not None:
         query = query.where(Property.walk_score >= params.min_walk_score)
 
-    if params.keywords:
-        for word in params.keywords.lower().split():
+    keywords = params.semantic_query or params.keywords
+    if keywords and not params.semantic_query:
+        for word in keywords.lower().split():
             pattern = f"%{word}%"
             query = query.where(
                 or_(
@@ -41,8 +43,79 @@ def search(db: Session, params: PropertySearchParams) -> list[Property]:
                     func.lower(cast(Property.features, String)).like(pattern),
                 )
             )
+    return query
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _search_pgvector(db: Session, query, query_vector: list[float], limit: int) -> list[Property]:
+    distance = Property.embedding.cosine_distance(query_vector)
+    return list(db.scalars(query.where(Property.embedding.is_not(None)).order_by(distance).limit(limit)).all())
+
+
+def _search_python_ranked(candidates: list[Property], query_vector: list[float], limit: int) -> list[Property]:
+    scored = [
+        (_cosine_similarity(query_vector, prop.embedding), prop)
+        for prop in candidates
+        if prop.embedding is not None
+    ]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [prop for _, prop in scored[:limit]]
+
+
+def search(db: Session, params: PropertySearchParams) -> list[Property]:
+    query = _apply_filters(select(Property), params)
+    settings = get_settings()
+
+    if params.semantic_query and settings.semantic_search_enabled:
+        from app.services.embeddings import embed_text
+
+        query_vector = embed_text(params.semantic_query)
+
+        if settings.is_postgres:
+            results = _search_pgvector(db, query, query_vector, params.limit)
+            if results:
+                return results
+
+        candidates = list(db.scalars(query).all())
+        ranked = _search_python_ranked(candidates, query_vector, params.limit)
+        if ranked:
+            return ranked
+
+        # Fallback: treat semantic_query as keywords if no embeddings yet
+        fallback = PropertySearchParams(**{**params.model_dump(), "keywords": params.semantic_query, "semantic_query": None})
+        return search(db, fallback)
 
     return list(db.scalars(query.order_by(Property.price.asc()).limit(params.limit)).all())
+
+
+def find_similar(db: Session, property_id: str, limit: int = 5, max_price: int | None = None) -> list[Property]:
+    source = get_by_id(db, property_id)
+    if source is None or source.embedding is None:
+        return []
+
+    settings = get_settings()
+    query = select(Property).where(Property.id != property_id)
+    if max_price is not None:
+        query = query.where(Property.price <= max_price)
+
+    if settings.is_postgres:
+        distance = Property.embedding.cosine_distance(source.embedding)
+        return list(
+            db.scalars(
+                query.where(Property.embedding.is_not(None)).order_by(distance).limit(limit)
+            ).all()
+        )
+
+    candidates = list(db.scalars(query).all())
+    return _search_python_ranked(candidates, source.embedding, limit)
 
 
 def get_by_id(db: Session, property_id: str) -> Property | None:
@@ -62,6 +135,10 @@ def get_neighborhood(db: Session, name: str, city: str | None = None) -> Neighbo
     if city:
         query = query.where(func.lower(Neighborhood.city) == city.lower())
     return db.scalars(query).first()
+
+
+def count_missing_embeddings(db: Session) -> int:
+    return db.scalar(select(func.count()).select_from(Property).where(Property.embedding.is_(None))) or 0
 
 
 def to_summary(prop: Property) -> dict:

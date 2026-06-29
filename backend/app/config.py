@@ -14,10 +14,19 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     llm_model: str = "gemini-3.1-flash-lite-preview"
     llm_temperature: float = 0.7
+    embedding_model: str = "models/text-embedding-004"
 
     @property
     def llm_configured(self) -> bool:
         return bool(self.google_api_key)
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.database_url.startswith("postgresql")
+
+    @property
+    def semantic_search_enabled(self) -> bool:
+        return self.llm_configured
 
 
 @lru_cache

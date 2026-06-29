@@ -20,6 +20,9 @@ SYSTEM_PROMPT = """You are HomeGuide AI, a conversational real estate assistant.
 Rules:
 - Ask clarifying questions when the request is vague (city, budget, beds).
 - Use tools to search listings and fetch details. Never invent listings or prices.
+- Use semantic_query in search_properties for natural language (vibe, style, feel).
+- Use structured filters (city, max_price, min_beds) for exact constraints.
+- Use find_similar_properties when the user wants homes like one they already saw.
 - Highlight 2-4 strong matches when presenting results.
 - If nothing matches, suggest relaxing one filter at a time.
 - You assist buyers; you do not replace a licensed agent.
@@ -55,9 +58,14 @@ def _make_tools(db: Session, found: list[Property]):
         min_school_rating: int | None = None,
         min_walk_score: int | None = None,
         keywords: str | None = None,
+        semantic_query: str | None = None,
         limit: int = 10,
     ) -> str:
-        """Search home listings by location, price, beds/baths, type, neighborhood, or keywords."""
+        """Search listings by filters (city, price, beds) and/or natural language (semantic_query).
+
+        Use semantic_query for vibe-based requests like 'cozy modern family home' or 'quiet street near schools'.
+        Use structured filters for exact constraints like city and max_price.
+        """
         params = PropertySearchParams(
             city=city,
             state=state,
@@ -70,6 +78,7 @@ def _make_tools(db: Session, found: list[Property]):
             min_school_rating=min_school_rating,
             min_walk_score=min_walk_score,
             keywords=keywords,
+            semantic_query=semantic_query,
             limit=limit,
         )
         results = property_db.search(db, params)
@@ -103,7 +112,26 @@ def _make_tools(db: Session, found: list[Property]):
                 found.append(prop)
         return json.dumps({"compared": [property_db.to_summary(p) for p in props]})
 
-    return [search_properties, get_property_details, get_neighborhood_info, compare_properties]
+    @tool
+    def find_similar_properties(
+        property_id: str,
+        limit: int = 5,
+        max_price: int | None = None,
+    ) -> str:
+        """Find listings similar to a given property ID. Optionally cap by max_price."""
+        results = property_db.find_similar(db, property_id, limit=limit, max_price=max_price)
+        for prop in results:
+            if prop.id not in {x.id for x in found}:
+                found.append(prop)
+        return json.dumps({"count": len(results), "listings": [property_db.to_summary(p) for p in results]})
+
+    return [
+        search_properties,
+        get_property_details,
+        get_neighborhood_info,
+        compare_properties,
+        find_similar_properties,
+    ]
 
 
 def _last_ai_text(messages) -> str:

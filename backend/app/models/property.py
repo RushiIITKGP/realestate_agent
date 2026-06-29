@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from app.db.base import Base
+from app.db.embedding_type import EmbeddingType
 
 
 class PropertyType(str, enum.Enum):
@@ -42,3 +43,4 @@ class Property(Base):
     status: Mapped[PropertyStatus] = mapped_column(
         Enum(PropertyStatus), nullable=False, default=PropertyStatus.FOR_SALE
     )
+    embedding: Mapped[list[float] | None] = mapped_column(EmbeddingType, nullable=True)
