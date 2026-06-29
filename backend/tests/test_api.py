@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agent.agent import _message_text
 from app.db.session import SessionLocal, init_db
 from app.main import create_app
 from app.seed.seed import seed_database
@@ -45,6 +46,11 @@ def test_property_keyword_search(client):
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 1
+
+
+def test_message_text_from_gemini_blocks():
+    content = [{"type": "text", "text": "Hello from Gemini.", "extras": {"signature": "abc"}}]
+    assert _message_text(content) == "Hello from Gemini."
 
 
 def test_chat_requires_google_api_key(client, monkeypatch):
