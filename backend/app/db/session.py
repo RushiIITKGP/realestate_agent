@@ -1,7 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -28,6 +28,10 @@ if settings.database_url.startswith("sqlite"):
 
 
 def init_db() -> None:
+    if settings.is_postgres:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
     Base.metadata.create_all(bind=engine)
 
 

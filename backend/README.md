@@ -2,12 +2,13 @@
 
 Conversational real estate assistant backend inspired by Homes.com Homes AI.
 
-Implements **Phases 1–4** from [PROCESS_DIAGRAMS.md](../PROCESS_DIAGRAMS.md):
+Implements **Phases 1–4** from [PROCESS_DIAGRAMS.md](../PROCESS_DIAGRAMS.md), plus **Phase 6** semantic search:
 
 - **Phase 1:** SQLAlchemy models, Alembic migrations, seed data
 - **Phase 2:** Property search service + REST endpoints
 - **Phase 3:** LangGraph agent with tools + `POST /chat`
 - **Phase 4:** SQLite checkpointer for multi-turn memory + CLI test client
+- **Phase 6:** Gemini embeddings + hybrid search (pgvector on PostgreSQL, Python ranking on SQLite)
 
 ## Stack
 

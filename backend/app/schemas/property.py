@@ -40,6 +40,10 @@ class PropertySearchParams(BaseModel):
     min_school_rating: int | None = Field(default=None, ge=1, le=10)
     min_walk_score: int | None = Field(default=None, ge=0, le=100)
     keywords: str | None = None
+    semantic_query: str | None = Field(
+        default=None,
+        description="Natural language search, e.g. 'cozy modern family home near good schools'",
+    )
     limit: int = Field(default=10, ge=1, le=50)
 
 
