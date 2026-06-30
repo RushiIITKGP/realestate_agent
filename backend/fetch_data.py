@@ -1,4 +1,4 @@
-"""Fetch real listings from RentCast, Walk Score, and market stats."""
+"""Fetch real listings and zip market stats from RentCast."""
 
 import os
 import sys
@@ -11,10 +11,8 @@ from sqlalchemy.orm import Session
 load_dotenv()
 
 RENTCAST_API_KEY = os.getenv("RENTCAST_API_KEY")
-WALKSCORE_API_KEY = os.getenv("WALKSCORE_API_KEY")
 LISTINGS_URL = "https://api.rentcast.io/v1/listings/sale"
 MARKETS_URL = "https://api.rentcast.io/v1/markets"
-WALKSCORE_URL = "https://api.walkscore.com/score"
 
 
 def _property_type(raw: str | None) -> str:
@@ -24,35 +22,6 @@ def _property_type(raw: str | None) -> str:
     if "town" in value:
         return "townhouse"
     return "house"
-
-
-def fetch_walk_score(address: str, lat: float, lon: float, cache: dict) -> int | None:
-    if not WALKSCORE_API_KEY:
-        return None
-
-    key = (round(lat, 4), round(lon, 4))
-    if key in cache:
-        return cache[key]
-
-    response = httpx.get(
-        WALKSCORE_URL,
-        params={
-            "format": "json",
-            "address": address,
-            "lat": lat,
-            "lon": lon,
-            "wsapikey": WALKSCORE_API_KEY,
-        },
-        timeout=15.0,
-    )
-    response.raise_for_status()
-    data = response.json()
-
-    if data.get("status") == 1 and data.get("walkscore") is not None:
-        score = int(data["walkscore"])
-        cache[key] = score
-        return score
-    return None
 
 
 def fetch_market_stats(zip_code: str) -> dict | None:
@@ -69,7 +38,7 @@ def fetch_market_stats(zip_code: str) -> dict | None:
     return response.json()
 
 
-def market_to_neighborhood(market: dict, city: str, state: str, avg_walk: int = 0) -> dict:
+def market_to_neighborhood(market: dict, city: str, state: str) -> dict:
     zip_code = market.get("zipCode") or market.get("id") or ""
     sale = market.get("saleData") or {}
     median = int(sale.get("medianPrice") or 0)
@@ -98,14 +67,11 @@ def market_to_neighborhood(market: dict, city: str, state: str, avg_walk: int = 
         "state": state,
         "summary": summary,
         "median_price": median,
-        "walk_score": avg_walk,
-        "school_rating": 0,
         "highlights": highlights,
-        "nearby_amenities": [f"ZIP {zip_code} area"],
     }
 
 
-def rentcast_to_row(item: dict, walk_score: int | None = None) -> dict:
+def rentcast_to_row(item: dict) -> dict:
     beds = int(item.get("bedrooms") or 0)
     baths = float(item.get("bathrooms") or 0)
     sqft = int(item.get("squareFootage") or 0)
@@ -122,16 +88,12 @@ def rentcast_to_row(item: dict, walk_score: int | None = None) -> dict:
     )
     if item.get("daysOnMarket"):
         description += f" {item['daysOnMarket']} days on market."
-    if walk_score is not None:
-        description += f" Walk Score {walk_score}."
 
     features = [prop_type]
     if item.get("lotSize"):
         features.append(f"lot {item['lotSize']:,} sqft")
     if item.get("yearBuilt"):
         features.append(f"built {item['yearBuilt']}")
-    if walk_score is not None:
-        features.append(f"walk score {walk_score}")
 
     return {
         "id": item["id"],
@@ -148,10 +110,6 @@ def rentcast_to_row(item: dict, walk_score: int | None = None) -> dict:
         "description": description,
         "features": features,
         "neighborhood": zip_code or item.get("county") or "Area",
-        "school_rating": 0,
-        "walk_score": walk_score or 0,
-        "commute_downtown": "N/A",
-        "image_url": None,
         "status": "for_sale",
     }
 
@@ -177,17 +135,7 @@ def import_listings(city: str, state: str, limit: int = 20, replace: bool = True
     from main import Neighborhood, Property, engine
 
     listings = fetch_sale_listings(city, state, limit)
-    walk_cache: dict = {}
-    rows = []
-
-    for item in listings:
-        address = item.get("formattedAddress") or item.get("addressLine1") or ""
-        lat = item.get("latitude")
-        lon = item.get("longitude")
-        walk = None
-        if lat is not None and lon is not None and address:
-            walk = fetch_walk_score(address, float(lat), float(lon), walk_cache)
-        rows.append(rentcast_to_row(item, walk_score=walk))
+    rows = [rentcast_to_row(item) for item in listings]
 
     zip_meta: dict[str, tuple[str, str]] = {}
     for item in listings:
@@ -214,17 +162,11 @@ def import_listings(city: str, state: str, limit: int = 20, replace: bool = True
 
         for zip_code, market in markets.items():
             zip_city, zip_state = zip_meta[zip_code]
-            zip_walks = [r["walk_score"] for r in rows if r["zip"] == zip_code and r["walk_score"]]
-            avg_walk = sum(zip_walks) // len(zip_walks) if zip_walks else 0
-            db.merge(Neighborhood(**market_to_neighborhood(market, zip_city, zip_state, avg_walk)))
+            db.merge(Neighborhood(**market_to_neighborhood(market, zip_city, zip_state)))
 
         db.commit()
 
-    return {
-        "listings": len(rows),
-        "neighborhoods": len(markets),
-        "walk_scores": sum(1 for r in rows if r["walk_score"]),
-    }
+    return {"listings": len(rows), "neighborhoods": len(markets)}
 
 
 if __name__ == "__main__":
@@ -233,4 +175,4 @@ if __name__ == "__main__":
     limit = int(sys.argv[3]) if len(sys.argv) > 3 else 20
 
     result = import_listings(city, state, limit=limit)
-    print(f"Imported {result['listings']} listings, {result['neighborhoods']} zip markets, {result['walk_scores']} walk scores")
+    print(f"Imported {result['listings']} listings, {result['neighborhoods']} zip markets")

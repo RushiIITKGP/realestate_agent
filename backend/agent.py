@@ -99,8 +99,6 @@ def _make_tools(db: Session, found: list):
                 "city": hood.city,
                 "summary": hood.summary,
                 "median_price": hood.median_price,
-                "walk_score": hood.walk_score,
-                "school_rating": hood.school_rating,
                 "highlights": hood.highlights,
             }
         )

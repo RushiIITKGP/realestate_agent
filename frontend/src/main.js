@@ -33,7 +33,7 @@ function addProperties(properties) {
     card.innerHTML = `
       <strong>$${p.price.toLocaleString()} · ${p.beds}bd / ${p.baths}ba</strong>
       ${p.address}, ${p.city}, ${p.state}<br>
-      ${p.neighborhood} · walk score ${p.walk_score}
+      ${p.neighborhood} · ${p.property_type}
     `;
     wrap.appendChild(card);
   }

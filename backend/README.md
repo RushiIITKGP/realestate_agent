@@ -2,7 +2,7 @@
 
 - `main.py` — API + database
 - `agent.py` — chat agent
-- `fetch_data.py` — import real listings + walk scores + zip market stats
+- `fetch_data.py` — import real listings + zip market stats from RentCast
 - `data.py` — mock listings (fallback)
 
 ## Run
@@ -23,13 +23,10 @@ Add to `.env`:
 
 ```env
 RENTCAST_API_KEY=your-rentcast-key
-WALKSCORE_API_KEY=your-walkscore-key
 USE_MOCK_DATA=false
 ```
 
-Get keys:
-- RentCast (listings + zip market stats): https://app.rentcast.io
-- Walk Score: https://www.walkscore.com/professional/api.php
+Get a key at https://app.rentcast.io
 
 Import:
 
@@ -38,13 +35,10 @@ python fetch_data.py Austin TX 20
 ```
 
 This fetches:
-- **Listings** from RentCast (address, price, beds, etc.)
-- **Walk Score** per property (Walk Score API)
+- **Listings** from RentCast (address, price, beds, baths, sqft, property type, year built, days on market, etc.)
 - **ZIP market stats** into neighborhood info (median price, days on market, property-type breakdown)
 
 Ask the agent about a ZIP code, e.g. *"How's the 78723 market?"*
-
-**Note:** School ratings are still not available from these APIs (would need GreatSchools or similar).
 
 ## Mock data
 

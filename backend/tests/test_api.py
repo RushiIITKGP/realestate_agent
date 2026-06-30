@@ -24,7 +24,7 @@ def test_search_listings():
     assert all(p.city == "Austin" for p in results)
 
 
-def test_rentcast_to_row_with_walk_score():
+def test_rentcast_to_row():
     row = rentcast_to_row(
         {
             "id": "3821-Hargis-St,-Austin,-TX-78723",
@@ -40,14 +40,13 @@ def test_rentcast_to_row_with_walk_score():
             "yearBuilt": 2008,
             "price": 899000,
             "status": "Active",
-            "latitude": 30.29,
-            "longitude": -97.70,
-        },
-        walk_score=82,
+            "daysOnMarket": 12,
+        }
     )
-    assert row["walk_score"] == 82
     assert row["neighborhood"] == "78723"
-    assert "Walk Score 82" in row["description"]
+    assert row["beds"] == 4
+    assert "12 days on market" in row["description"]
+    assert "walk_score" not in row
 
 
 def test_market_to_neighborhood():
@@ -64,12 +63,11 @@ def test_market_to_neighborhood():
         },
         "Austin",
         "TX",
-        avg_walk=78,
     )
     assert hood["name"] == "78723"
     assert hood["median_price"] == 650000
-    assert hood["walk_score"] == 78
     assert "78723" in hood["summary"]
+    assert "walk_score" not in hood
 
 
 def test_import_listings_endpoint(client, monkeypatch):
@@ -88,13 +86,10 @@ def test_import_listings_endpoint(client, monkeypatch):
             "yearBuilt": 2010,
             "price": 500000,
             "status": "Active",
-            "latitude": 30.27,
-            "longitude": -97.74,
         }
     ]
 
     monkeypatch.setattr("fetch_data.fetch_sale_listings", lambda city, state, limit: sample)
-    monkeypatch.setattr("fetch_data.fetch_walk_score", lambda address, lat, lon, cache: 85)
     monkeypatch.setattr(
         "fetch_data.fetch_market_stats",
         lambda zip_code: {
@@ -108,13 +103,13 @@ def test_import_listings_endpoint(client, monkeypatch):
     body = response.json()
     assert body["message"] == "Imported 1 listings"
     assert body["neighborhoods"] == 1
-    assert body["walk_scores"] == 1
+    assert "walk_scores" not in body
 
     with Session(engine) as db:
         results = search_listings(db, city="Austin")
         hood = get_neighborhood(db, "78701", "Austin")
     assert len(results) == 1
-    assert results[0].walk_score == 85
+    assert results[0].price == 500000
     assert hood is not None
     assert hood.median_price == 550000
 

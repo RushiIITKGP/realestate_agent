@@ -46,10 +46,6 @@ class Property(Base):
     description: Mapped[str] = mapped_column(Text)
     features: Mapped[list] = mapped_column(JSON)
     neighborhood: Mapped[str] = mapped_column(String(100))
-    school_rating: Mapped[int] = mapped_column(Integer)
-    walk_score: Mapped[int] = mapped_column(Integer)
-    commute_downtown: Mapped[str] = mapped_column(String(100))
-    image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(20))
 
 
@@ -62,10 +58,7 @@ class Neighborhood(Base):
     state: Mapped[str] = mapped_column(String(2))
     summary: Mapped[str] = mapped_column(Text)
     median_price: Mapped[int] = mapped_column(Integer)
-    walk_score: Mapped[int] = mapped_column(Integer)
-    school_rating: Mapped[int] = mapped_column(Integer)
     highlights: Mapped[list] = mapped_column(JSON)
-    nearby_amenities: Mapped[list] = mapped_column(JSON)
 
 
 Base.metadata.create_all(engine)
@@ -140,10 +133,7 @@ def listing_card(prop: Property) -> dict:
         "sqft": prop.sqft,
         "neighborhood": prop.neighborhood,
         "property_type": prop.property_type,
-        "school_rating": prop.school_rating,
-        "walk_score": prop.walk_score,
         "description": prop.description,
-        "image_url": prop.image_url,
     }
 
 
@@ -186,7 +176,6 @@ def import_real_listings(city: str = "Austin", state: str = "TX", limit: int = 2
         "city": city,
         "state": state,
         "neighborhoods": result["neighborhoods"],
-        "walk_scores": result["walk_scores"],
     }
 
 
