@@ -6,26 +6,18 @@ class PropertySummary(BaseModel):
     address: str
     city: str
     state: str
-    zip: str
     price: int
     beds: int
     baths: float
     sqft: int
-    property_type: str
     neighborhood: str
+    property_type: str
     school_rating: int
     walk_score: int
     description: str
-    features: list[str]
     image_url: str | None = None
-    status: str
 
     model_config = {"from_attributes": True}
-
-
-class PropertyDetail(PropertySummary):
-    year_built: int
-    commute_downtown: str
 
 
 class PropertySearchParams(BaseModel):
@@ -40,23 +32,16 @@ class PropertySearchParams(BaseModel):
     min_school_rating: int | None = Field(default=None, ge=1, le=10)
     min_walk_score: int | None = Field(default=None, ge=0, le=100)
     keywords: str | None = None
-    semantic_query: str | None = Field(
-        default=None,
-        description="Natural language search, e.g. 'cozy modern family home near good schools'",
-    )
+    semantic_query: str | None = None
     limit: int = Field(default=10, ge=1, le=50)
 
 
-class NeighborhoodResponse(BaseModel):
-    id: str
-    name: str
-    city: str
-    state: str
-    summary: str
-    median_price: int
-    walk_score: int
-    school_rating: int
-    highlights: list[str]
-    nearby_amenities: list[str]
+class ChatRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=4000)
 
-    model_config = {"from_attributes": True}
+
+class ChatResponse(BaseModel):
+    session_id: str
+    message: str
+    properties: list[PropertySummary] = Field(default_factory=list)

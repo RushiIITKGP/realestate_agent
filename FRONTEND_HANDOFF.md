@@ -44,7 +44,6 @@ Content-Type: application/json
       "address": "903 Oak Hill Ln",
       "city": "Austin",
       "state": "TX",
-      "zip": "78704",
       "price": 749000,
       "beds": 3,
       "baths": 2.5,
@@ -54,9 +53,7 @@ Content-Type: application/json
       "school_rating": 8,
       "walk_score": 78,
       "description": "...",
-      "features": ["patio", "garage"],
-      "image_url": "https://...",
-      "status": "for_sale"
+      "image_url": "https://..."
     }
   ]
 }
@@ -115,10 +112,10 @@ Agent: [details about that listing]
 
 ## Optional (not required for MVP)
 
-| Feature | Endpoint |
+| Feature | How |
 |---|---|
-| Property detail modal on card click | `GET /properties/{id}` |
-| Similar homes (detail view or via chat) | `GET /properties/{id}/similar` |
+| Property detail modal on card click | Ask in chat: "Tell me more about prop-003" |
+| Similar homes | Ask in chat: "Show me homes like the first one" |
 | Backend health check | `GET /health` |
 
 ---
@@ -130,8 +127,9 @@ Agent: [details about that listing]
 - Map with pins
 - Keyword search bar
 - Auth / login / favorites
+- Direct `GET /properties` REST calls (removed — chat only)
 
-The agent handles search intent through conversation. Filter APIs exist on the backend for the agent's tools, not for human-facing filter UI.
+The agent handles all search through conversation.
 
 ---
 

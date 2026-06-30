@@ -1,28 +1,12 @@
 services:
-  db:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: realestate
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
   api:
     build: .
     ports:
       - "8000:8000"
     env_file:
       - .env
-    depends_on:
-      - db
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/realestate
+      DATABASE_URL: sqlite:////app/data/realestate.db
       CHECKPOINT_DB_URL: sqlite:////app/data/checkpoints.db
     volumes:
       - ./data:/app/data
-
-volumes:
-  pgdata:

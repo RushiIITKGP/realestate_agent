@@ -11,10 +11,9 @@ from langgraph.prebuilt import create_react_agent
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Property
-from app.schemas.chat import ChatResponse
-from app.schemas.property import PropertySearchParams, PropertySummary
-from app.services import properties as property_db
+from app.db import Property
+from app.schemas import ChatResponse, PropertySearchParams, PropertySummary
+from app import search as listing_search
 
 SYSTEM_PROMPT = """You are HomeGuide AI, a conversational real estate assistant.
 
@@ -46,6 +45,14 @@ def _get_checkpointer() -> SqliteSaver:
     return SqliteSaver(conn)
 
 
+def _track(found: list[Property], props: list[Property]) -> None:
+    seen = {p.id for p in found}
+    for prop in props:
+        if prop.id not in seen:
+            found.append(prop)
+            seen.add(prop.id)
+
+
 def _make_tools(db: Session, found: list[Property]):
     @tool
     def search_properties(
@@ -63,11 +70,7 @@ def _make_tools(db: Session, found: list[Property]):
         semantic_query: str | None = None,
         limit: int = 10,
     ) -> str:
-        """Search listings by filters (city, price, beds) and/or natural language (semantic_query).
-
-        Use semantic_query for vibe-based requests like 'cozy modern family home' or 'quiet street near schools'.
-        Use structured filters for exact constraints like city and max_price.
-        """
+        """Search listings by filters and/or natural language (semantic_query)."""
         params = PropertySearchParams(
             city=city,
             state=state,
@@ -83,36 +86,35 @@ def _make_tools(db: Session, found: list[Property]):
             semantic_query=semantic_query,
             limit=limit,
         )
-        results = property_db.search(db, params)
-        found.extend(p for p in results if p.id not in {x.id for x in found})
-        return json.dumps({"count": len(results), "listings": [property_db.to_summary(p) for p in results]})
+        results = listing_search.search(db, params)
+        _track(found, results)
+        return json.dumps(
+            {"count": len(results), "listings": [listing_search.to_summary(p) for p in results]}
+        )
 
     @tool
     def get_property_details(property_id: str) -> str:
         """Get full details for one listing by property ID."""
-        prop = property_db.get_by_id(db, property_id)
+        prop = listing_search.get_by_id(db, property_id)
         if prop is None:
             return json.dumps({"error": "Property not found"})
-        if prop.id not in {x.id for x in found}:
-            found.append(prop)
-        return json.dumps({"property": property_db.to_detail(prop)})
+        _track(found, [prop])
+        return json.dumps({"property": listing_search.to_detail(prop)})
 
     @tool
     def get_neighborhood_info(neighborhood: str, city: str | None = None) -> str:
         """Get neighborhood guide: schools, walkability, amenities, median price."""
-        hood = property_db.get_neighborhood(db, neighborhood, city)
+        hood = listing_search.get_neighborhood(db, neighborhood, city)
         if hood is None:
             return json.dumps({"error": "Neighborhood guide not found"})
-        return json.dumps({"neighborhood": property_db.neighborhood_to_dict(hood)})
+        return json.dumps({"neighborhood": listing_search.neighborhood_to_dict(hood)})
 
     @tool
     def compare_properties(property_ids: list[str]) -> str:
         """Compare 2-4 listings side by side by property ID."""
-        props = property_db.get_by_ids(db, property_ids)
-        for prop in props:
-            if prop.id not in {x.id for x in found}:
-                found.append(prop)
-        return json.dumps({"compared": [property_db.to_summary(p) for p in props]})
+        props = listing_search.get_by_ids(db, property_ids)
+        _track(found, props)
+        return json.dumps({"compared": [listing_search.to_summary(p) for p in props]})
 
     @tool
     def find_similar_properties(
@@ -120,12 +122,12 @@ def _make_tools(db: Session, found: list[Property]):
         limit: int = 5,
         max_price: int | None = None,
     ) -> str:
-        """Find listings similar to a given property ID. Optionally cap by max_price."""
-        results = property_db.find_similar(db, property_id, limit=limit, max_price=max_price)
-        for prop in results:
-            if prop.id not in {x.id for x in found}:
-                found.append(prop)
-        return json.dumps({"count": len(results), "listings": [property_db.to_summary(p) for p in results]})
+        """Find listings similar to a given property ID."""
+        results = listing_search.find_similar(db, property_id, limit=limit, max_price=max_price)
+        _track(found, results)
+        return json.dumps(
+            {"count": len(results), "listings": [listing_search.to_summary(p) for p in results]}
+        )
 
     return [
         search_properties,
