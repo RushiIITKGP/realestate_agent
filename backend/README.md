@@ -29,12 +29,6 @@ curl -X POST http://127.0.0.1:8000/chat \
 
 Reuse the same `session_id` for multi-turn memory.
 
-## CLI test client
-
-```bash
-python3 scripts/cli_chat.py
-```
-
 ## Project layout
 
 ```
