@@ -88,7 +88,7 @@ def _make_tools(db: Session, found: list):
 
     @tool
     def get_neighborhood_info(neighborhood: str, city: str | None = None) -> str:
-        """Get neighborhood guide."""
+        """Get neighborhood or ZIP code market guide (use ZIP code from a listing, e.g. 78723)."""
         _emit_status(_status("get_neighborhood_info", {"neighborhood": neighborhood}))
         hood = get_neighborhood(db, neighborhood, city)
         if not hood:
@@ -101,6 +101,7 @@ def _make_tools(db: Session, found: list):
                 "median_price": hood.median_price,
                 "walk_score": hood.walk_score,
                 "school_rating": hood.school_rating,
+                "highlights": hood.highlights,
             }
         )
 

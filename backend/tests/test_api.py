@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from fetch_data import rentcast_to_row
-from main import app, engine, search_listings, seed_db, Session
+from fetch_data import market_to_neighborhood, rentcast_to_row
+from main import app, engine, search_listings, seed_db, Session, get_neighborhood
 
 
 @pytest.fixture()
@@ -24,15 +24,15 @@ def test_search_listings():
     assert all(p.city == "Austin" for p in results)
 
 
-def test_rentcast_to_row():
+def test_rentcast_to_row_with_walk_score():
     row = rentcast_to_row(
         {
             "id": "3821-Hargis-St,-Austin,-TX-78723",
             "addressLine1": "3821 Hargis St",
+            "formattedAddress": "3821 Hargis St, Austin, TX 78723",
             "city": "Austin",
             "state": "TX",
             "zipCode": "78723",
-            "county": "Travis",
             "propertyType": "Single Family",
             "bedrooms": 4,
             "bathrooms": 2.5,
@@ -40,12 +40,36 @@ def test_rentcast_to_row():
             "yearBuilt": 2008,
             "price": 899000,
             "status": "Active",
-            "daysOnMarket": 10,
-        }
+            "latitude": 30.29,
+            "longitude": -97.70,
+        },
+        walk_score=82,
     )
-    assert row["city"] == "Austin"
-    assert row["price"] == 899000
-    assert row["beds"] == 4
+    assert row["walk_score"] == 82
+    assert row["neighborhood"] == "78723"
+    assert "Walk Score 82" in row["description"]
+
+
+def test_market_to_neighborhood():
+    hood = market_to_neighborhood(
+        {
+            "zipCode": "78723",
+            "saleData": {
+                "medianPrice": 650000,
+                "averageDaysOnMarket": 45,
+                "totalListings": 120,
+                "averagePricePerSquareFoot": 320,
+                "dataByPropertyType": [{"propertyType": "Single Family", "medianPrice": 700000}],
+            },
+        },
+        "Austin",
+        "TX",
+        avg_walk=78,
+    )
+    assert hood["name"] == "78723"
+    assert hood["median_price"] == 650000
+    assert hood["walk_score"] == 78
+    assert "78723" in hood["summary"]
 
 
 def test_import_listings_endpoint(client, monkeypatch):
@@ -53,6 +77,7 @@ def test_import_listings_endpoint(client, monkeypatch):
         {
             "id": "test-listing-1",
             "addressLine1": "100 Test St",
+            "formattedAddress": "100 Test St, Austin, TX 78701",
             "city": "Austin",
             "state": "TX",
             "zipCode": "78701",
@@ -63,19 +88,35 @@ def test_import_listings_endpoint(client, monkeypatch):
             "yearBuilt": 2010,
             "price": 500000,
             "status": "Active",
+            "latitude": 30.27,
+            "longitude": -97.74,
         }
     ]
 
     monkeypatch.setattr("fetch_data.fetch_sale_listings", lambda city, state, limit: sample)
+    monkeypatch.setattr("fetch_data.fetch_walk_score", lambda address, lat, lon, cache: 85)
+    monkeypatch.setattr(
+        "fetch_data.fetch_market_stats",
+        lambda zip_code: {
+            "zipCode": zip_code,
+            "saleData": {"medianPrice": 550000, "averageDaysOnMarket": 30, "totalListings": 50},
+        },
+    )
 
     response = client.post("/listings/import", params={"city": "Austin", "state": "TX", "limit": 1})
     assert response.status_code == 200
-    assert response.json()["message"] == "Imported 1 listings"
+    body = response.json()
+    assert body["message"] == "Imported 1 listings"
+    assert body["neighborhoods"] == 1
+    assert body["walk_scores"] == 1
 
     with Session(engine) as db:
         results = search_listings(db, city="Austin")
+        hood = get_neighborhood(db, "78701", "Austin")
     assert len(results) == 1
-    assert results[0].address == "100 Test St"
+    assert results[0].walk_score == 85
+    assert hood is not None
+    assert hood.median_price == 550000
 
 
 def test_chat_stream_needs_api_key(client, monkeypatch):

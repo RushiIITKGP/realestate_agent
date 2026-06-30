@@ -117,7 +117,12 @@ def get_listing(db: Session, property_id: str) -> Property | None:
 
 
 def get_neighborhood(db: Session, name: str, city: str | None = None) -> Neighborhood | None:
-    query = select(Neighborhood).where(func.lower(Neighborhood.name) == name.lower())
+    query = select(Neighborhood).where(
+        or_(
+            func.lower(Neighborhood.name) == name.lower(),
+            Neighborhood.id == f"zip-{name}",
+        )
+    )
     if city:
         query = query.where(func.lower(Neighborhood.city) == city.lower())
     return db.scalars(query).first()
@@ -170,13 +175,19 @@ def import_real_listings(city: str = "Austin", state: str = "TX", limit: int = 2
     from fetch_data import import_listings
 
     try:
-        count = import_listings(city=city, state=state, limit=limit, replace=True)
+        result = import_listings(city=city, state=state, limit=limit, replace=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"RentCast request failed: {exc}") from exc
+        raise HTTPException(502, f"Data import failed: {exc}") from exc
 
-    return {"message": f"Imported {count} listings", "city": city, "state": state}
+    return {
+        "message": f"Imported {result['listings']} listings",
+        "city": city,
+        "state": state,
+        "neighborhoods": result["neighborhoods"],
+        "walk_scores": result["walk_scores"],
+    }
 
 
 @app.post("/chat/stream")

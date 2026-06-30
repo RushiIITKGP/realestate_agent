@@ -2,7 +2,7 @@
 
 - `main.py` — API + database
 - `agent.py` — chat agent
-- `fetch_data.py` — import real listings from RentCast
+- `fetch_data.py` — import real listings + walk scores + zip market stats
 - `data.py` — mock listings (fallback)
 
 ## Run
@@ -13,42 +13,42 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# add GOOGLE_API_KEY
 
 uvicorn main:app --reload
 ```
 
-## Real listings (RentCast)
+## Real data import
 
-1. Sign up at https://app.rentcast.io and copy your API key
-2. Add to `.env`:
-   ```
-   RENTCAST_API_KEY=your-key
-   USE_MOCK_DATA=false
-   ```
-3. Import listings (uses 1 API call):
+Add to `.env`:
+
+```env
+RENTCAST_API_KEY=your-rentcast-key
+WALKSCORE_API_KEY=your-walkscore-key
+USE_MOCK_DATA=false
+```
+
+Get keys:
+- RentCast (listings + zip market stats): https://app.rentcast.io
+- Walk Score: https://www.walkscore.com/professional/api.php
+
+Import:
 
 ```bash
 python fetch_data.py Austin TX 20
 ```
 
-Or via API:
+This fetches:
+- **Listings** from RentCast (address, price, beds, etc.)
+- **Walk Score** per property (Walk Score API)
+- **ZIP market stats** into neighborhood info (median price, days on market, property-type breakdown)
 
-```bash
-curl -X POST "http://127.0.0.1:8000/listings/import?city=Austin&state=TX&limit=20"
-```
+Ask the agent about a ZIP code, e.g. *"How's the 78723 market?"*
 
-4. Chat — the agent searches real imported listings.
+**Note:** School ratings are still not available from these APIs (would need GreatSchools or similar).
 
-**Note:** If you had an old database, delete it first so the wider listing ID column is created:
+## Mock data
 
-```bash
-rm data/realestate.db
-```
-
-## Mock data (no RentCast key)
-
-Leave `USE_MOCK_DATA=true` — 12 sample listings load automatically.
+Leave `USE_MOCK_DATA=true` to use sample listings in `data.py`.
 
 ## Frontend
 
