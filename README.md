@@ -16,7 +16,7 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env        # add GOOGLE_API_KEY
-uvicorn app.main:app --reload
+uvicorn main:app --reload
 ```
 
 API docs: http://127.0.0.1:8000/docs
