@@ -1,7 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import JSON, Enum, Float, Integer, String, Text, create_engine, event
+from sqlalchemy import JSON, Float, Integer, String, Text, create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.config import get_settings
@@ -70,6 +70,22 @@ def _sqlite_pragma(dbapi_connection, _):
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _migrate_sqlite_schema()
+
+
+def _migrate_sqlite_schema() -> None:
+    """Add columns missing from older local SQLite DBs (no Alembic)."""
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "properties" not in inspector.get_table_names():
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("properties")}
+    if "embedding" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE properties ADD COLUMN embedding JSON"))
 
 
 def get_db() -> Generator[Session, None, None]:
