@@ -3,6 +3,5 @@
     "**/.venv": true,
     "**/.pytest_cache": true,
     "**/__pycache__": true,
-    "backend/data": true
   }
 }
