@@ -11,7 +11,14 @@ from langgraph.config import get_stream_writer
 from langgraph.prebuilt import create_react_agent
 from sqlalchemy.orm import Session
 
-from main import get_listing, get_neighborhood, listing_card, search_listings
+from main import (
+    get_listing,
+    get_neighborhood,
+    listing_card,
+    search_listings,
+    search_semantic,
+    search_similar_listings,
+)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")
@@ -20,7 +27,14 @@ CHECKPOINT_DB = os.getenv("CHECKPOINT_DB_URL", "sqlite:///./data/checkpoints.db"
 PROMPT = """You are HomeGuide AI, a conversational real estate assistant.
 Use tools to search listings. Never invent prices or addresses.
 Ask clarifying questions if city or budget is missing.
-Keep answers short."""
+Keep answers short.
+
+Search tools:
+- search_properties: filters (city, price, beds, keywords)
+- search_properties_semantic: natural language vibe/style (e.g. "modern loft", "family home with yard")
+- find_similar_properties: same vibe as a listing the user already saw — pass that listing's id
+
+When the user says "the 2nd one" or "that listing", use the id from your earlier search results."""
 
 
 def _checkpointer():
@@ -44,6 +58,10 @@ def _status(tool_name: str, args: dict | None = None) -> str:
     if tool_name == "search_properties":
         city = args.get("city")
         return f"Searching homes in {city}..." if city else "Searching listings..."
+    if tool_name == "search_properties_semantic":
+        return "Matching homes by vibe..."
+    if tool_name == "find_similar_properties":
+        return "Finding similar listings..."
     if tool_name == "get_property_details":
         return "Fetching property details..."
     if tool_name == "get_neighborhood_info":
@@ -72,6 +90,41 @@ def _make_tools(db: Session, found: list):
         results = search_listings(db, city=city, max_price=max_price, min_beds=min_beds, keywords=keywords, limit=limit)
         found.extend(results)
         return json.dumps({"count": len(results), "listings": [listing_card(p) for p in results]})
+
+    @tool
+    def search_properties_semantic(
+        query: str,
+        city: str | None = None,
+        max_price: int | None = None,
+        limit: int = 10,
+    ) -> str:
+        """Search listings by natural language vibe or description (not exact filters)."""
+        _emit_status(_status("search_properties_semantic"))
+        results = search_semantic(db, query, city=city, max_price=max_price, limit=limit)
+        found.extend(results)
+        return json.dumps({"count": len(results), "listings": [listing_card(p) for p in results]})
+
+    @tool
+    def find_similar_properties(
+        property_id: str,
+        city: str | None = None,
+        max_price: int | None = None,
+        limit: int = 5,
+    ) -> str:
+        """Find listings with a similar vibe to a property the user already saw. Use the listing id."""
+        _emit_status(_status("find_similar_properties"))
+        results = search_similar_listings(
+            db, property_id, limit=limit, city=city, max_price=max_price
+        )
+        found.extend(results)
+        ref = get_listing(db, property_id)
+        return json.dumps(
+            {
+                "reference": listing_card(ref) if ref else None,
+                "count": len(results),
+                "listings": [listing_card(p) for p in results],
+            }
+        )
 
     @tool
     def get_property_details(property_id: str) -> str:
@@ -103,7 +156,13 @@ def _make_tools(db: Session, found: list):
             }
         )
 
-    return [search_properties, get_property_details, get_neighborhood_info]
+    return [
+        search_properties,
+        search_properties_semantic,
+        find_similar_properties,
+        get_property_details,
+        get_neighborhood_info,
+    ]
 
 
 def stream_chat(db: Session, session_id: str, message: str):

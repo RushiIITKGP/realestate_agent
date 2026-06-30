@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -8,14 +9,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel
-from sqlalchemy import JSON, Float, Integer, String, Text, create_engine, delete, func, or_, select
+from sqlalchemy import JSON, Float, Integer, String, Text, create_engine, delete, func, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/realestate.db")
 RENTCAST_API_KEY = os.getenv("RENTCAST_API_KEY")
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Austin")
@@ -53,6 +56,7 @@ class Property(Base):
     features: Mapped[list] = mapped_column(JSON)
     neighborhood: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20))
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class Neighborhood(Base):
@@ -68,6 +72,71 @@ class Neighborhood(Base):
 
 
 Base.metadata.create_all(engine)
+
+
+def _ensure_embedding_column() -> None:
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(properties)"))}
+        if "embedding" not in cols:
+            conn.execute(text("ALTER TABLE properties ADD COLUMN embedding JSON"))
+            conn.commit()
+
+
+_ensure_embedding_column()
+
+
+def property_embed_text(prop: Property | dict) -> str:
+    if isinstance(prop, dict):
+        features = ", ".join(prop.get("features") or [])
+        return (
+            f"{prop.get('description', '')} Features: {features}. "
+            f"Type: {prop.get('property_type', '')}. "
+            f"{prop.get('beds', 0)} bed {prop.get('baths', 0)} bath {prop.get('sqft', 0)} sqft "
+            f"in {prop.get('neighborhood', '')}, {prop.get('city', '')}."
+        )
+    features = ", ".join(prop.features or [])
+    return (
+        f"{prop.description} Features: {features}. Type: {prop.property_type}. "
+        f"{prop.beds} bed {prop.baths} bath {prop.sqft} sqft "
+        f"in {prop.neighborhood}, {prop.city}."
+    )
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    if not GOOGLE_API_KEY:
+        raise ValueError("Set GOOGLE_API_KEY in backend/.env")
+    if not texts:
+        return []
+    embedder = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL, google_api_key=GOOGLE_API_KEY)
+    return embedder.embed_documents(texts)
+
+
+def embed_text(text: str) -> list[float]:
+    return embed_texts([text])[0]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def index_embeddings(db: Session, property_ids: list[str] | None = None) -> int:
+    query = select(Property).where(Property.embedding.is_(None))
+    if property_ids:
+        query = query.where(Property.id.in_(property_ids))
+    props = list(db.scalars(query))
+    if not props:
+        return 0
+
+    vectors = embed_texts([property_embed_text(p) for p in props])
+    for prop, vector in zip(props, vectors):
+        prop.embedding = vector
+    db.commit()
+    return len(props)
 
 
 def _property_type(raw: str | None) -> str:
@@ -219,12 +288,22 @@ def import_listings(city: str, state: str, limit: int = 20, replace: bool = True
 
         db.commit()
 
-    return {"listings": len(rows), "neighborhoods": len(markets)}
+    embedded = 0
+    if GOOGLE_API_KEY:
+        with Session(engine) as db:
+            embedded = index_embeddings(db)
+
+    return {"listings": len(rows), "neighborhoods": len(markets), "embedded": embedded}
 
 
 def ensure_listings() -> None:
     with Session(engine) as db:
         if db.scalar(select(func.count()).select_from(Property)):
+            missing = db.scalar(
+                select(func.count()).select_from(Property).where(Property.embedding.is_(None))
+            )
+            if missing:
+                index_embeddings(db)
             return
     if not RENTCAST_API_KEY:
         return
@@ -257,6 +336,47 @@ def search_listings(
                 )
             )
     return list(db.scalars(query.order_by(Property.price).limit(limit)))
+
+
+def search_similar_listings(
+    db: Session,
+    property_id: str,
+    limit: int = 5,
+    city: str | None = None,
+    max_price: int | None = None,
+) -> list[Property]:
+    ref = get_listing(db, property_id)
+    if not ref or not ref.embedding:
+        return []
+
+    query = select(Property).where(Property.embedding.isnot(None), Property.id != property_id)
+    if city:
+        query = query.where(func.lower(Property.city) == city.lower())
+    if max_price is not None:
+        query = query.where(Property.price <= max_price)
+
+    scored = [(_cosine(ref.embedding, p.embedding), p) for p in db.scalars(query)]
+    scored.sort(key=lambda row: row[0], reverse=True)
+    return [p for _, p in scored[:limit]]
+
+
+def search_semantic(
+    db: Session,
+    query_text: str,
+    city: str | None = None,
+    max_price: int | None = None,
+    limit: int = 10,
+) -> list[Property]:
+    vector = embed_text(query_text)
+    sql = select(Property).where(Property.embedding.isnot(None))
+    if city:
+        sql = sql.where(func.lower(Property.city) == city.lower())
+    if max_price is not None:
+        sql = sql.where(Property.price <= max_price)
+
+    scored = [(_cosine(vector, p.embedding), p) for p in db.scalars(sql)]
+    scored.sort(key=lambda row: row[0], reverse=True)
+    return [p for _, p in scored[:limit]]
 
 
 def get_listing(db: Session, property_id: str) -> Property | None:
@@ -331,6 +451,7 @@ def import_real_listings(city: str = "Austin", state: str = "TX", limit: int = 2
         "city": city,
         "state": state,
         "neighborhoods": result["neighborhoods"],
+        "embedded": result.get("embedded", 0),
     }
 
 

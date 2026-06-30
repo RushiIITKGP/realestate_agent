@@ -19,7 +19,14 @@ cp .env.example .env   # add GOOGLE_API_KEY and RENTCAST_API_KEY
 uvicorn main:app --reload
 ```
 
-On first start, if the database is empty, listings are imported automatically for `DEFAULT_CITY` / `DEFAULT_STATE`.
+On first start, if the database is empty, listings are imported automatically for `DEFAULT_CITY` / `DEFAULT_STATE`. Embeddings are generated on import for semantic / vibe search.
+
+## Semantic search
+
+The agent can match listings by vibe using embeddings (`gemini-embedding-001`):
+
+- *"Find me something with the same vibe as the 2nd listing"* → uses listing id from prior results
+- *"Modern minimalist condo under 600k"* → natural language semantic search
 
 ## Import more listings
 

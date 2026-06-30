@@ -10,6 +10,7 @@ from main import (
     market_to_neighborhood,
     rentcast_to_row,
     search_listings,
+    search_similar_listings,
 )
 
 SAMPLE_LISTING = {
@@ -28,6 +29,30 @@ SAMPLE_LISTING = {
     "status": "Active",
 }
 
+SAMPLE_HOUSE = {
+    **SAMPLE_LISTING,
+    "id": "test-listing-2",
+    "addressLine1": "200 Oak Ave",
+    "formattedAddress": "200 Oak Ave, Austin, TX 78702",
+    "zipCode": "78702",
+    "propertyType": "Single Family",
+    "bedrooms": 4,
+    "price": 750000,
+}
+
+
+def _fake_embed(texts):
+    vectors = []
+    for text in texts:
+        lower = text.lower()
+        if "condo" in lower:
+            vectors.append([1.0, 0.0, 0.0])
+        elif "single family" in lower:
+            vectors.append([0.9, 0.1, 0.0])
+        else:
+            vectors.append([0.0, 1.0, 0.0])
+    return vectors
+
 
 @pytest.fixture()
 def client():
@@ -45,6 +70,8 @@ def _import_sample(monkeypatch, listings=None):
             "saleData": {"medianPrice": 550000, "averageDaysOnMarket": 30, "totalListings": 50},
         },
     )
+    monkeypatch.setattr("main.embed_texts", _fake_embed)
+    monkeypatch.setattr("main.GOOGLE_API_KEY", "test-key")
     return import_listings("Austin", "TX", limit=len(listings))
 
 
@@ -101,6 +128,14 @@ def test_search_listings(monkeypatch):
     assert results[0].city == "Austin"
 
 
+def test_similar_listings(monkeypatch):
+    _import_sample(monkeypatch, listings=[SAMPLE_LISTING, SAMPLE_HOUSE])
+    with Session(engine) as db:
+        similar = search_similar_listings(db, "test-listing-1", limit=3)
+    assert len(similar) == 1
+    assert similar[0].id == "test-listing-2"
+
+
 def test_import_listings_endpoint(client, monkeypatch):
     monkeypatch.setattr("main.fetch_sale_listings", lambda city, state, limit: [SAMPLE_LISTING])
     monkeypatch.setattr(
@@ -110,18 +145,22 @@ def test_import_listings_endpoint(client, monkeypatch):
             "saleData": {"medianPrice": 550000, "averageDaysOnMarket": 30, "totalListings": 50},
         },
     )
+    monkeypatch.setattr("main.embed_texts", _fake_embed)
+    monkeypatch.setattr("main.GOOGLE_API_KEY", "test-key")
 
     response = client.post("/listings/import", params={"city": "Austin", "state": "TX", "limit": 1})
     assert response.status_code == 200
     body = response.json()
     assert body["message"] == "Imported 1 listings"
     assert body["neighborhoods"] == 1
+    assert body["embedded"] == 1
 
     with Session(engine) as db:
         results = search_listings(db, city="Austin")
         hood = get_neighborhood(db, "78701", "Austin")
     assert len(results) == 1
     assert results[0].price == 500000
+    assert results[0].embedding is not None
     assert hood is not None
     assert hood.median_price == 550000
 
