@@ -1,11 +1,13 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.agent import ChatError, run_chat
+from app.agent import ChatError, run_chat, stream_chat
 from app.config import get_settings
 from app.db import SessionLocal, get_db, init_db
 from app.schemas import ChatRequest, ChatResponse
@@ -50,6 +52,23 @@ def create_app() -> FastAPI:
             return run_chat(db, request.session_id, request.message)
         except ChatError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/chat/stream")
+    def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
+        if not settings.llm_configured:
+            raise HTTPException(
+                status_code=503,
+                detail="GOOGLE_API_KEY is not configured. Copy backend/.env.example to backend/.env.",
+            )
+
+        def events():
+            try:
+                for event in stream_chat(db, request.session_id, request.message):
+                    yield f"data: {json.dumps(event)}\n\n"
+            except ChatError as exc:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream")
 
     return app
 

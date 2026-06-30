@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     llm_model: str = "gemini-3.1-flash-lite-preview"
     llm_temperature: float = 0.7
     embedding_model: str = "models/text-embedding-004"
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
     @property
     def llm_configured(self) -> bool:

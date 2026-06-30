@@ -3,7 +3,7 @@ import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -163,6 +163,12 @@ def _last_ai_text(messages) -> str:
     return "I couldn't generate a response. Please try again."
 
 
+def _chunk_text(chunk) -> str:
+    if isinstance(chunk, AIMessageChunk):
+        return _message_text(chunk.content)
+    return ""
+
+
 def run_chat(db: Session, session_id: str, message: str) -> ChatResponse:
     settings = get_settings()
     if not settings.llm_configured:
@@ -187,3 +193,35 @@ def run_chat(db: Session, session_id: str, message: str) -> ChatResponse:
         message=_last_ai_text(result["messages"]),
         properties=[PropertySummary.model_validate(p, from_attributes=True) for p in found],
     )
+
+
+def stream_chat(db: Session, session_id: str, message: str):
+    """Yield SSE event dicts: text chunks, then properties, then done."""
+    settings = get_settings()
+    if not settings.llm_configured:
+        raise ChatError("GOOGLE_API_KEY is not configured. Copy backend/.env.example to backend/.env.", 503)
+
+    found: list[Property] = []
+    llm = ChatGoogleGenerativeAI(
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        google_api_key=settings.google_api_key,
+    )
+    agent = create_react_agent(llm, _make_tools(db, found), prompt=SYSTEM_PROMPT, checkpointer=_get_checkpointer())
+    config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        for msg, _ in agent.stream(
+            {"messages": [HumanMessage(content=message)]},
+            config=config,
+            stream_mode="messages",
+        ):
+            text = _chunk_text(msg)
+            if text:
+                yield {"type": "text", "content": text}
+    except Exception as exc:
+        raise ChatError(f"Agent failed: {exc}", 502) from exc
+
+    properties = [PropertySummary.model_validate(p, from_attributes=True).model_dump() for p in found]
+    yield {"type": "properties", "properties": properties}
+    yield {"type": "done"}

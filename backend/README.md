@@ -1,6 +1,6 @@
 # HomeGuide AI — chat-only backend
 
-SQLite + LangGraph agent. One main endpoint: `POST /chat`.
+SQLite + LangGraph agent with streaming chat.
 
 ## Quick start
 
@@ -15,46 +15,36 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Swagger: http://127.0.0.1:8000/docs
-
 ## API
 
-### POST /chat
+| Method | Path | Description |
+|---|---|---|
+| POST | `/chat/stream` | Streaming chat (SSE) — used by frontend |
+| POST | `/chat` | Non-streaming chat |
+| GET | `/health` | Health check |
+
+### Streaming example
 
 ```bash
-curl -X POST http://127.0.0.1:8000/chat \
+curl -N -X POST http://127.0.0.1:8000/chat/stream \
   -H "Content-Type: application/json" \
   -d '{"session_id":"demo-1","message":"3 bed homes in Austin under 800k"}'
 ```
 
-Reuse the same `session_id` for multi-turn memory.
+SSE events: `text` (token chunks), `properties`, `done`.
 
-## Project layout
+## Frontend
 
+```bash
+cd frontend
+npm install
+npm run dev
 ```
-backend/app/
-  main.py           # FastAPI app (health + chat)
-  agent.py          # LangGraph agent + tools
-  search.py         # Listing search + embeddings (agent tools only)
-  db.py             # SQLite models + session
-  schemas.py        # Request/response models
-  seed.py           # Seed on startup
-  data_listings.py  # Mock listings data
-  config.py
-```
+
+Open http://localhost:5173 — Vite proxies `/chat` to the backend.
 
 ## Tests
 
 ```bash
-pytest
+cd backend && pytest
 ```
-
-## Environment
-
-| Variable | Description |
-|---|---|
-| `GOOGLE_API_KEY` | Required for `/chat` and embedding index |
-| `DATABASE_URL` | Default: `sqlite:///./data/realestate.db` |
-| `CHECKPOINT_DB_URL` | Conversation memory DB |
-| `LLM_MODEL` | Default: `gemini-3.1-flash-lite-preview` |
-| `EMBEDDING_MODEL` | Default: `models/text-embedding-004` |

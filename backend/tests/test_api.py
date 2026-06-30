@@ -80,4 +80,10 @@ def test_chat_requires_google_api_key(client, monkeypatch):
     )
     assert response.status_code == 503
 
+    stream_response = client.post(
+        "/chat/stream",
+        json={"session_id": "test-session", "message": "homes in Austin"},
+    )
+    assert stream_response.status_code == 503
+
     get_settings.cache_clear()
