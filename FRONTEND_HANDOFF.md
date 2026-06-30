@@ -1,88 +1,108 @@
-# Frontend Handoff — Chat-First HomeGuide AI
+# Frontend Handoff — HomeGuide AI
 
-This product is a **conversational real estate assistant** (Homes AI–style), not a traditional listing site with filters.
+Chat-first real estate assistant (Homes.com Homes AI style). **The chat is the product** — users describe what they want in natural language; the agent searches listings and streams answers + property cards.
 
-**The AI chat is the product.** Users describe what they want in natural language; the agent searches listings and returns answers + property cards. Multi-turn conversation refines results over time.
+No filter sidebar, no browse-all-listings page, no map for MVP.
 
 ---
 
 ## What to build (MVP)
 
-### 1. Chat UI (the whole app)
+### 1. Chat UI
 
 - Message list: user messages + assistant messages
 - Text input + send button
-- Loading indicator while waiting for the API (responses can take 5–15 seconds)
+- **New chat** button (new `session_id`, clear thread)
+- Loading/status while the agent works (searches can take 5–15 seconds)
 - Empty state with suggested prompts, e.g.:
   - "3 bed homes in Austin under $800k"
-  - "Family-friendly home near good schools"
-  - "Something cozy with a backyard in Denver"
+  - "Modern minimalist condo under 600k in Austin"
+  - "Homes in Dallas under $400k"
 
-### 2. Connect to the backend
+### 2. Connect to the backend (SSE streaming)
 
-**Primary endpoint (everything goes through this):**
+**Primary endpoint:**
 
 ```
-POST /chat
+POST /chat/stream
 Content-Type: application/json
 
 {
-  "session_id": "user-abc-123",
-  "message": "3 bed homes in Austin under 800k"
+  "session_id": "uuid-from-localStorage",
+  "message": "Modern minimalist condo under 600k in Austin"
 }
 ```
 
-**Response:**
+**Response:** `text/event-stream` (Server-Sent Events). Each line:
+
+```
+data: {"type":"status","content":"Searching homes in Austin..."}
+
+data: {"type":"text","content":"I found "}
+
+data: {"type":"text","content":"a few options..."}
+
+data: {"type":"properties","properties":[...]}
+
+data: {"type":"done"}
+```
+
+### 3. Handle event types
+
+| `type` | Payload | UI |
+|--------|---------|-----|
+| `status` | `{ "content": "Searching homes in Austin..." }` | Show as loading/status text |
+| `text` | `{ "content": "..." }` | Append to assistant message bubble (streaming) |
+| `properties` | `{ "properties": [...] }` | Render property cards below the message |
+| `done` | `{}` | Stream finished — re-enable send button |
+| `error` | `{ "message": "..." }` | Show error in assistant bubble |
+
+### 4. Property card fields
+
+Each item in `properties`:
 
 ```json
 {
-  "session_id": "user-abc-123",
-  "message": "I found 2 homes in Austin under $800k...",
-  "properties": [
-    {
-      "id": "prop-003",
-      "address": "903 Oak Hill Ln",
-      "city": "Austin",
-      "state": "TX",
-      "price": 749000,
-      "beds": 3,
-      "baths": 2.5,
-      "sqft": 1950,
-      "property_type": "house",
-      "neighborhood": "Zilker",
-      "school_rating": 8,
-      "walk_score": 78,
-      "description": "...",
-      "image_url": "https://..."
-    }
-  ]
+  "id": "11604-Moore-Rd,-Austin,-TX-78719",
+  "address": "11604 Moore Rd",
+  "city": "Austin",
+  "state": "TX",
+  "price": 1400000,
+  "beds": 4,
+  "baths": 2.5,
+  "sqft": 2345,
+  "neighborhood": "78719",
+  "property_type": "house",
+  "description": "Single Family for sale in Austin, TX. 4 bedrooms..."
 }
 ```
 
-### 3. Render the response
+| Field | UI suggestion |
+|-------|----------------|
+| `price` | Large, formatted (`$1,400,000`) |
+| `beds`, `baths` | `4bd / 2.5ba` |
+| `address`, `city`, `state` | Full address line |
+| `neighborhood` | ZIP code from RentCast |
+| `property_type` | `house`, `condo`, `townhouse` |
+| `sqft` | Optional |
+| `description` | Optional, truncated |
 
-| Field | UI |
-|---|---|
-| `message` | Assistant text bubble |
-| `properties` | Property cards inline below the message (image, price, address, beds/baths, neighborhood) |
+**Not available:** `image_url`, `walk_score`, `school_rating` (RentCast does not provide these).
 
-### 4. Session memory (required)
+### 5. Session memory (required)
 
-- Generate a UUID on first visit, store in `localStorage` as `session_id`
-- Send the **same** `session_id` on every `POST /chat` request
-- Optional: "New chat" button generates a new UUID and clears the thread
+- Generate a UUID on first visit → `localStorage.setItem("session_id", id)`
+- Send the **same** `session_id` on every `POST /chat/stream` request
+- **New chat** → new UUID + clear message list
 
 Multi-turn example:
 
 ```
-User: I'm looking for a family home
-Agent: Which city and budget?
+User: Show me homes in Austin under $800k
+Agent: [status → streaming text → property cards]
 
-User: Austin, under 800k, at least 3 beds
-Agent: [message + property cards]
-
-User: Tell me more about the cheaper one
-Agent: [details about that listing]
+User: Find something with the same vibe as the 2nd one
+Agent: [uses listing id from prior results → similar homes]
 ```
 
 ---
@@ -94,14 +114,14 @@ Agent: [details about that listing]
 │  HomeGuide AI          [New chat]   │
 ├─────────────────────────────────────┤
 │                                     │
-│  User: 3 bed homes in Austin...     │
+│  User: Modern condo in Austin...    │
 │                                     │
-│  Agent: I found 2 great options...  │
-│  ┌─────────┐  ┌─────────┐          │
-│  │ $749k   │  │ $1.1M   │          │
-│  │ 3bd/2ba │  │ 4bd/3ba │          │
-│  │ Zilker  │  │ Barton  │          │
-│  └─────────┘  └─────────┘          │
+│  Agent: I found a few options...    │
+│  ┌──────────┐  ┌──────────┐        │
+│  │ $525k    │  │ $489k    │        │
+│  │ 2bd/2ba  │  │ 2bd/1ba  │        │
+│  │ Austin   │  │ Austin   │        │
+│  └──────────┘  └──────────┘        │
 │                                     │
 ├─────────────────────────────────────┤
 │  [ Type your message...      ] Send │
@@ -110,26 +130,10 @@ Agent: [details about that listing]
 
 ---
 
-## Optional (not required for MVP)
+## Reference implementation
 
-| Feature | How |
-|---|---|
-| Property detail modal on card click | Ask in chat: "Tell me more about prop-003" |
-| Similar homes | Ask in chat: "Show me homes like the first one" |
-| Backend health check | `GET /health` |
-
----
-
-## Do NOT build for MVP
-
-- Filter sidebar / search forms (city, price, beds dropdowns)
-- Browse-all-listings catalog page
-- Map with pins
-- Keyword search bar
-- Auth / login / favorites
-- Direct `GET /properties` REST calls (removed — chat only)
-
-The agent handles all search through conversation.
+See `frontend/src/main.js` for a working SSE client (stream parsing, session id, property cards).  
+See `frontend/src/style.css` for minimal styling. **Build your own UI** — this is reference only.
 
 ---
 
@@ -138,93 +142,146 @@ The agent handles all search through conversation.
 ```bash
 cd backend
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env               # backend dev must add GOOGLE_API_KEY
+cp .env.example .env   # backend dev adds GOOGLE_API_KEY + RENTCAST_API_KEY
 uvicorn main:app --reload
 ```
 
 | Resource | URL |
-|---|---|
+|----------|-----|
 | API base | `http://127.0.0.1:8000` |
 | Swagger docs | `http://127.0.0.1:8000/docs` |
 | Backend README | `backend/README.md` |
 
-**Note:** Chat requires `GOOGLE_API_KEY` in `backend/.env`. Without it, `POST /chat` returns `503`.
+Chat requires both `GOOGLE_API_KEY` and `RENTCAST_API_KEY` in `backend/.env`. Without them, `POST /chat/stream` returns `503`.
+
+Listings must be in the database (auto-import on first start, or manual import — see backend README).
 
 ---
 
-## Frontend tech (your choice)
+## Frontend setup
 
-- Next.js (scaffold exists at repo root) or React + Vite
-- Env var: `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000`
-- `fetch` or axios for `POST /chat`
-- Tailwind or similar for styling
+Tech stack is your choice: **Next.js, React + Vite, etc.**
 
-### Example fetch
+Env var pointing at the API:
+
+```env
+# Vite
+VITE_API_URL=http://127.0.0.1:8000
+
+# Next.js
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+```
+
+CORS is already enabled (`allow_origins: *`) on the backend.
+
+### Example SSE client (TypeScript)
 
 ```typescript
-const sessionId = localStorage.getItem("session_id") ?? crypto.randomUUID();
-localStorage.setItem("session_id", sessionId);
+const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
-const res = await fetch(`${API_URL}/chat`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ session_id: sessionId, message: userText }),
-});
+function getSessionId(): string {
+  let id = localStorage.getItem("session_id");
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem("session_id", id);
+  }
+  return id;
+}
 
-const data = await res.json();
-// data.message → assistant bubble
-// data.properties → render cards
+async function streamChat(
+  message: string,
+  onStatus: (text: string) => void,
+  onText: (chunk: string) => void,
+  onProperties: (properties: Property[]) => void,
+) {
+  const response = await fetch(`${API_URL}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: getSessionId(), message }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail ?? `Error ${response.status}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const event = JSON.parse(line.slice(6));
+
+      if (event.type === "status") onStatus(event.content);
+      else if (event.type === "text") onText(event.content);
+      else if (event.type === "properties") onProperties(event.properties);
+      else if (event.type === "error") throw new Error(event.message);
+    }
+  }
+}
 ```
 
 ---
 
 ## Error handling
 
-| Status | Meaning | UI |
-|---|---|---|
-| `200` | Success | Show message + cards |
-| `503` | Missing API key on backend | "Chat unavailable — backend not configured" |
-| `502` | Agent/LLM error | "Something went wrong, try again" |
+| Status / event | Meaning | UI |
+|----------------|---------|-----|
+| `200` + SSE stream | Success | Stream status → text → cards |
+| `503` | Missing API keys on backend | "Chat unavailable — backend not configured" |
+| `type: "error"` in stream | Agent/runtime error | Show `message` in assistant bubble |
 | Network error | Backend not running | "Cannot reach server" |
 
-Show a loading state during the request. Do not allow double-send while loading.
+Disable send while streaming. Do not allow double-send.
 
 ---
 
-## CORS
+## Optional endpoints (not required for MVP)
 
-If the frontend runs on a different port (e.g. `localhost:3000`), the backend may need CORS enabled. Ask the backend dev to add your origin to FastAPI if you see CORS errors in the browser console.
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Returns `{ "status": "ok" }` — connectivity check |
+| `POST /listings/import?city=Austin&state=TX&limit=100` | **Backend/admin only** — imports listings from RentCast. Not a frontend feature. |
 
 ---
 
-## Not available yet
+## Do NOT build for MVP
 
-| Feature | Status |
-|---|---|
-| Streaming responses (token-by-token) | Phase 5 — not built |
-| Voice input/output | Phase 7 — not built |
-| User accounts / auth | Not built |
-| Maps integration | Not built |
-
-Build against full JSON responses from `POST /chat` (wait for complete response, then render).
+- Filter sidebar / search forms (city, price, beds dropdowns)
+- Browse-all-listings catalog page
+- Map with pins
+- Keyword search bar (agent handles search via chat)
+- Auth / login / favorites
+- Direct listing REST APIs (removed — chat only)
 
 ---
 
 ## Definition of done
 
 - [ ] Chat UI with message history
-- [ ] `POST /chat` integrated with stable `session_id`
-- [ ] Assistant `message` rendered as text
-- [ ] `properties` rendered as cards in the thread
+- [ ] `POST /chat/stream` integrated with stable `session_id`
+- [ ] SSE events handled: `status`, `text`, `properties`, `done`, `error`
+- [ ] Assistant text streams token-by-token
+- [ ] Property cards rendered inline in the thread
 - [ ] Loading and error states
-- [ ] Multi-turn works (same session, follow-up questions)
+- [ ] New chat clears thread + new session
+- [ ] Multi-turn works (follow-up questions, "2nd listing", vibe queries)
 - [ ] Runs against local backend at `:8000`
 
 ---
 
 ## Related docs
 
-- [backend/README.md](backend/README.md) — API setup and endpoints
-- [PROCESS_DIAGRAMS.md](PROCESS_DIAGRAMS.md) — architecture (Diagram 2 = main chat flow)
+- [backend/README.md](backend/README.md) — API setup, data import, embeddings
+- [README.md](README.md) — project overview
