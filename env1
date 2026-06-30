@@ -1,0 +1,15 @@
+# Application
+APP_NAME=HomeGuide AI
+DEBUG=true
+
+# Database (SQLite default; switch to PostgreSQL later)
+DATABASE_URL=sqlite:///./data/realestate.db
+
+# Google Gemini (required for POST /chat)
+GOOGLE_API_KEY="AIzaSyBIubrjqZPkzA1pBVxdbog3g4i7_ftm8xE"
+LLM_MODEL=gemini-3.1-flash-lite-preview
+LLM_TEMPERATURE=0.7
+
+# LangGraph checkpointer (SQLite file for conversation memory)
+CHECKPOINT_DB_URL=sqlite:///./data/checkpoints.db
+EMBEDDING_MODEL=models/gemini-embedding-001
