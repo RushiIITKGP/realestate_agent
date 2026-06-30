@@ -1,33 +1,37 @@
-# realestate_agent
+# HomeGuide AI
 
-Conversational real estate assistant inspired by Homes.com Homes AI.
+Chat-first real estate assistant. Listings from [RentCast](https://app.rentcast.io), chat powered by Google Gemini.
 
-## Project structure
+## Structure
 
-- **`backend/`** — FastAPI + LangGraph + Google Gemini (Phases 1–4)
-- **`PROCESS_DIAGRAMS.md`** — Architecture and flow diagrams
-- **`TECH_STACK_LEARNING.md`** — Learning roadmap
+```
+backend/
+  main.py      # API + database + RentCast import
+  agent.py     # chat agent
+frontend/      # Vite chat UI
+```
 
-## Backend quick start
+## Quick start
+
+### 1. Backend
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # add GOOGLE_API_KEY
+cp .env.example .env   # add GOOGLE_API_KEY + RENTCAST_API_KEY
 uvicorn main:app --reload
 ```
 
-API docs: http://127.0.0.1:8000/docs
-
-See [backend/README.md](backend/README.md) for full setup.
-
-## Frontend (optional, later)
-
-Next.js scaffold is included for future frontend work:
+### 2. Frontend (second terminal)
 
 ```bash
+cd frontend
 npm install
 npm run dev
 ```
+
+Open http://localhost:5173
+
+See [backend/README.md](backend/README.md) for more detail.
