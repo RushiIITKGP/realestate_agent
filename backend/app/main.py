@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     @app.post("/chat/stream")
-    def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
+    def chat_stream(request: ChatRequest):
         if not settings.llm_configured:
             raise HTTPException(
                 status_code=503,
@@ -62,11 +62,12 @@ def create_app() -> FastAPI:
             )
 
         def events():
-            try:
-                for event in stream_chat(db, request.session_id, request.message):
-                    yield f"data: {json.dumps(event)}\n\n"
-            except ChatError as exc:
-                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            with SessionLocal() as db:
+                try:
+                    for event in stream_chat(db, request.session_id, request.message):
+                        yield f"data: {json.dumps(event)}\n\n"
+                except ChatError as exc:
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
         return StreamingResponse(events(), media_type="text/event-stream")
 

@@ -169,24 +169,48 @@ def _chunk_text(chunk) -> str:
     return ""
 
 
+def _is_broken_history_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "INVALID_CHAT_HISTORY" in msg or "tool_calls that do not have a corresponding ToolMessage" in msg
+
+
+def _clear_session(session_id: str) -> None:
+    _get_checkpointer().delete_thread(session_id)
+
+
+def _build_agent(db: Session, found: list[Property]):
+    settings = get_settings()
+    llm = ChatGoogleGenerativeAI(
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        google_api_key=settings.google_api_key,
+    )
+    return create_react_agent(
+        llm, _make_tools(db, found), prompt=SYSTEM_PROMPT, checkpointer=_get_checkpointer()
+    )
+
+
 def run_chat(db: Session, session_id: str, message: str) -> ChatResponse:
     settings = get_settings()
     if not settings.llm_configured:
         raise ChatError("GOOGLE_API_KEY is not configured. Copy backend/.env.example to backend/.env.", 503)
 
     found: list[Property] = []
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        temperature=settings.llm_temperature,
-        google_api_key=settings.google_api_key,
-    )
-    agent = create_react_agent(llm, _make_tools(db, found), prompt=SYSTEM_PROMPT, checkpointer=_get_checkpointer())
-
+    agent = _build_agent(db, found)
     config = {"configurable": {"thread_id": session_id}}
-    try:
-        result = agent.invoke({"messages": [HumanMessage(content=message)]}, config=config)
-    except Exception as exc:
-        raise ChatError(f"Agent failed: {exc}", 502) from exc
+    payload = {"messages": [HumanMessage(content=message)]}
+
+    for attempt in range(2):
+        try:
+            result = agent.invoke(payload, config=config)
+            break
+        except Exception as exc:
+            if attempt == 0 and _is_broken_history_error(exc):
+                _clear_session(session_id)
+                continue
+            raise ChatError(f"Agent failed: {exc}", 502) from exc
+    else:
+        raise ChatError("Agent failed after retry.", 502)
 
     return ChatResponse(
         session_id=session_id,
@@ -202,25 +226,24 @@ def stream_chat(db: Session, session_id: str, message: str):
         raise ChatError("GOOGLE_API_KEY is not configured. Copy backend/.env.example to backend/.env.", 503)
 
     found: list[Property] = []
-    llm = ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        temperature=settings.llm_temperature,
-        google_api_key=settings.google_api_key,
-    )
-    agent = create_react_agent(llm, _make_tools(db, found), prompt=SYSTEM_PROMPT, checkpointer=_get_checkpointer())
+    agent = _build_agent(db, found)
     config = {"configurable": {"thread_id": session_id}}
+    payload = {"messages": [HumanMessage(content=message)]}
 
-    try:
-        for msg, _ in agent.stream(
-            {"messages": [HumanMessage(content=message)]},
-            config=config,
-            stream_mode="messages",
-        ):
-            text = _chunk_text(msg)
-            if text:
-                yield {"type": "text", "content": text}
-    except Exception as exc:
-        raise ChatError(f"Agent failed: {exc}", 502) from exc
+    for attempt in range(2):
+        try:
+            for msg, _ in agent.stream(payload, config=config, stream_mode="messages"):
+                text = _chunk_text(msg)
+                if text:
+                    yield {"type": "text", "content": text}
+            break
+        except Exception as exc:
+            if attempt == 0 and _is_broken_history_error(exc):
+                _clear_session(session_id)
+                continue
+            raise ChatError(f"Agent failed: {exc}", 502) from exc
+    else:
+        raise ChatError("Agent failed after retry.", 502)
 
     properties = [PropertySummary.model_validate(p, from_attributes=True).model_dump() for p in found]
     yield {"type": "properties", "properties": properties}
