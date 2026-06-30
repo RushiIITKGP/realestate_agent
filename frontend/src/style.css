@@ -67,6 +67,11 @@ main {
   background: #f3f4f6;
 }
 
+.message.assistant.status {
+  color: #6b7280;
+  font-style: italic;
+}
+
 .properties {
   display: grid;
   gap: 0.75rem;

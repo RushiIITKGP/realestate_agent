@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.config import get_stream_writer
 from langgraph.prebuilt import create_react_agent
 from sqlalchemy.orm import Session
 
@@ -53,6 +54,42 @@ def _track(found: list[Property], props: list[Property]) -> None:
             seen.add(prop.id)
 
 
+def _emit_status(message: str) -> None:
+    try:
+        get_stream_writer()({"type": "status", "content": message})
+    except Exception:
+        pass
+
+
+def _status_for_tool(name: str, args: dict) -> str:
+    if name == "search_properties":
+        city = args.get("city")
+        if city:
+            return f"Searching homes in {city}..."
+        return "Searching listings..."
+    if name == "get_property_details":
+        return "Fetching property details..."
+    if name == "get_neighborhood_info":
+        neighborhood = args.get("neighborhood", "the area")
+        return f"Looking up {neighborhood}..."
+    if name == "compare_properties":
+        return "Comparing properties..."
+    if name == "find_similar_properties":
+        return "Finding similar homes..."
+    return "Working on your request..."
+
+
+def _status_from_updates(update: dict) -> str | None:
+    for node_update in update.values():
+        if not isinstance(node_update, dict):
+            continue
+        for msg in node_update.get("messages", []):
+            if isinstance(msg, AIMessage) and msg.tool_calls:
+                tc = msg.tool_calls[0]
+                return _status_for_tool(tc["name"], tc.get("args") or {})
+    return None
+
+
 def _make_tools(db: Session, found: list[Property]):
     @tool
     def search_properties(
@@ -71,6 +108,7 @@ def _make_tools(db: Session, found: list[Property]):
         limit: int = 10,
     ) -> str:
         """Search listings by filters and/or natural language (semantic_query)."""
+        _emit_status(_status_for_tool("search_properties", {"city": city}))
         params = PropertySearchParams(
             city=city,
             state=state,
@@ -95,6 +133,7 @@ def _make_tools(db: Session, found: list[Property]):
     @tool
     def get_property_details(property_id: str) -> str:
         """Get full details for one listing by property ID."""
+        _emit_status(_status_for_tool("get_property_details", {}))
         prop = listing_search.get_by_id(db, property_id)
         if prop is None:
             return json.dumps({"error": "Property not found"})
@@ -104,6 +143,7 @@ def _make_tools(db: Session, found: list[Property]):
     @tool
     def get_neighborhood_info(neighborhood: str, city: str | None = None) -> str:
         """Get neighborhood guide: schools, walkability, amenities, median price."""
+        _emit_status(_status_for_tool("get_neighborhood_info", {"neighborhood": neighborhood}))
         hood = listing_search.get_neighborhood(db, neighborhood, city)
         if hood is None:
             return json.dumps({"error": "Neighborhood guide not found"})
@@ -112,6 +152,7 @@ def _make_tools(db: Session, found: list[Property]):
     @tool
     def compare_properties(property_ids: list[str]) -> str:
         """Compare 2-4 listings side by side by property ID."""
+        _emit_status(_status_for_tool("compare_properties", {}))
         props = listing_search.get_by_ids(db, property_ids)
         _track(found, props)
         return json.dumps({"compared": [listing_search.to_summary(p) for p in props]})
@@ -123,6 +164,7 @@ def _make_tools(db: Session, found: list[Property]):
         max_price: int | None = None,
     ) -> str:
         """Find listings similar to a given property ID."""
+        _emit_status(_status_for_tool("find_similar_properties", {}))
         results = listing_search.find_similar(db, property_id, limit=limit, max_price=max_price)
         _track(found, results)
         return json.dumps(
@@ -232,10 +274,23 @@ def stream_chat(db: Session, session_id: str, message: str):
 
     for attempt in range(2):
         try:
-            for msg, _ in agent.stream(payload, config=config, stream_mode="messages"):
-                text = _chunk_text(msg)
-                if text:
-                    yield {"type": "text", "content": text}
+            yield {"type": "status", "content": "Thinking..."}
+            for mode, chunk in agent.stream(
+                payload,
+                config=config,
+                stream_mode=["messages", "custom", "updates"],
+            ):
+                if mode == "custom" and isinstance(chunk, dict) and chunk.get("type") == "status":
+                    yield chunk
+                elif mode == "updates":
+                    status = _status_from_updates(chunk)
+                    if status:
+                        yield {"type": "status", "content": status}
+                elif mode == "messages":
+                    msg, _ = chunk
+                    text = _chunk_text(msg)
+                    if text:
+                        yield {"type": "text", "content": text}
             break
         except Exception as exc:
             if attempt == 0 and _is_broken_history_error(exc):

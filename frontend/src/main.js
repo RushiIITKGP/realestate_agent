@@ -54,7 +54,9 @@ async function streamChat(message) {
     throw new Error(err.detail || `Error ${response.status}`);
   }
 
-  const assistantEl = addMessage("assistant", "");
+  const assistantEl = addMessage("assistant", "Thinking...");
+  assistantEl.classList.add("status");
+  let hasText = false;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -71,7 +73,16 @@ async function streamChat(message) {
       if (!line.startsWith("data: ")) continue;
       const event = JSON.parse(line.slice(6));
 
-      if (event.type === "text") {
+      if (event.type === "status") {
+        assistantEl.textContent = event.content;
+        assistantEl.classList.add("status");
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (event.type === "text") {
+        if (!hasText) {
+          assistantEl.textContent = "";
+          assistantEl.classList.remove("status");
+          hasText = true;
+        }
         assistantEl.textContent += event.content;
         messagesEl.scrollTop = messagesEl.scrollHeight;
       } else if (event.type === "properties") {
