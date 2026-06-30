@@ -26,15 +26,10 @@ CHECKPOINT_DB = os.getenv("CHECKPOINT_DB_URL", "sqlite:///./data/checkpoints.db"
 
 PROMPT = """You are HomeGuide AI, a conversational real estate assistant.
 Use tools to search listings. Never invent prices or addresses.
-Ask clarifying questions if city or budget is missing.
 Keep answers short.
 
-Search tools:
-- search_properties: filters (city, price, beds, keywords)
-- search_properties_semantic: natural language vibe/style (e.g. "modern loft", "family home with yard")
-- find_similar_properties: same vibe as a listing the user already saw — pass that listing's id
-
-When the user says "the 2nd one" or "that listing", use the id from your earlier search results."""
+Pick the search tool based on the user's wording (see each tool's description).
+When the user says "the 2nd one" or "that listing", use find_similar_properties with that listing's id."""
 
 
 def _checkpointer():
@@ -85,7 +80,11 @@ def _make_tools(db: Session, found: list):
         keywords: str | None = None,
         limit: int = 10,
     ) -> str:
-        """Search home listings by city, price, beds, or keywords."""
+        """Filter listings by structured criteria only: city, max price, min beds, or exact keywords.
+
+        Use for plain filters without style or vibe language, e.g. "homes in Austin under 800k"
+        or "3 bedroom in Austin". Do NOT use when the user describes style, feel, or aesthetic
+        (modern, cozy, minimalist, loft, family-friendly, etc.) — use search_properties_semantic instead."""
         _emit_status(_status("search_properties", {"city": city}))
         results = search_listings(db, city=city, max_price=max_price, min_beds=min_beds, keywords=keywords, limit=limit)
         found.extend(results)
@@ -98,7 +97,17 @@ def _make_tools(db: Session, found: list):
         max_price: int | None = None,
         limit: int = 10,
     ) -> str:
-        """Search listings by natural language vibe or description (not exact filters)."""
+        """Search by natural language vibe, style, or lifestyle using embeddings.
+
+        Use whenever the user describes how a home feels or looks — including on the first message.
+        Also use when vibe language is combined with city or budget in one request.
+
+        Examples:
+        - "modern minimalist condo under 600k in Austin" → query="modern minimalist condo", city="Austin", max_price=600000
+        - "cozy family home with a yard in Denver"
+        - "bright open loft under 500k"
+
+        Put the descriptive phrase in query. Pass city and max_price when the user mentions them."""
         _emit_status(_status("search_properties_semantic"))
         results = search_semantic(db, query, city=city, max_price=max_price, limit=limit)
         found.extend(results)
