@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agent.agent import _message_text
 from app.db.session import SessionLocal, init_db
 from app.main import create_app
 from app.models import Property
@@ -50,6 +51,11 @@ def test_property_keyword_search(client):
     assert len(data) >= 1
 
 
+<<<<<<< HEAD
+def test_message_text_from_gemini_blocks():
+    content = [{"type": "text", "text": "Hello from Gemini.", "extras": {"signature": "abc"}}]
+    assert _message_text(content) == "Hello from Gemini."
+=======
 def test_semantic_search_with_embeddings(client, monkeypatch):
     init_db()
     with SessionLocal() as db:
@@ -100,6 +106,7 @@ def test_similar_endpoint(client):
     response = client.get("/properties/prop-003/similar")
     assert response.status_code == 200
     assert len(response.json()) >= 1
+>>>>>>> 93de31e440052ecdefbec756cfdc28b9e132ed94
 
 
 def test_chat_requires_google_api_key(client, monkeypatch):

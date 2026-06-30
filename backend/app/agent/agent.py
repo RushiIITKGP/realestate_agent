@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
@@ -41,7 +42,8 @@ def _get_checkpointer() -> SqliteSaver:
     url = get_settings().checkpoint_db_url
     path = url.replace("sqlite:///", "", 1) if url.startswith("sqlite:///") else url
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    return SqliteSaver.from_conn_string(path)
+    conn = sqlite3.connect(path, check_same_thread=False)
+    return SqliteSaver(conn)
 
 
 def _make_tools(db: Session, found: list[Property]):
@@ -134,11 +136,28 @@ def _make_tools(db: Session, found: list[Property]):
     ]
 
 
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
 def _last_ai_text(messages) -> str:
     for message in reversed(messages):
-        if isinstance(message, AIMessage) and message.content:
-            if isinstance(message.content, str):
-                return message.content
+        if isinstance(message, AIMessage):
+            text = _message_text(message.content)
+            if text:
+                return text
     return "I couldn't generate a response. Please try again."
 
 
