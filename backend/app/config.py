@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     llm_model: str = "gemini-3.1-flash-lite-preview"
     llm_temperature: float = 0.7
-    embedding_model: str = "models/text-embedding-004"
+    embedding_model: str = "models/gemini-embedding-001"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
     @property

@@ -25,7 +25,8 @@ def create_app() -> FastAPI:
         init_db()
         with SessionLocal() as db:
             seed_database(db)
-            if settings.llm_configured and listing_search.count_missing_embeddings(db) > 0:
+            if settings.llm_configured:
+                listing_search.clear_embeddings(db)
                 try:
                     count = listing_search.embed_properties(db)
                     logger.info("Indexed embeddings for %s properties", count)

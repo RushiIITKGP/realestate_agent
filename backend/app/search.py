@@ -85,8 +85,17 @@ def _get_embedder() -> GoogleGenerativeAIEmbeddings:
     )
 
 
-def embed_text(text: str) -> list[float]:
-    return _get_embedder().embed_query(text)
+def clear_embeddings(db: Session) -> None:
+    for prop in db.scalars(select(Property)).all():
+        prop.embedding = None
+    db.commit()
+
+
+def embed_text(text: str) -> list[float] | None:
+    try:
+        return _get_embedder().embed_query(text)
+    except Exception:
+        return None
 
 
 def embed_properties(db: Session, properties: list[Property] | None = None) -> int:
@@ -96,7 +105,11 @@ def embed_properties(db: Session, properties: list[Property] | None = None) -> i
         return 0
 
     texts = [property_to_text(p) for p in properties]
-    vectors = _get_embedder().embed_documents(texts)
+    try:
+        vectors = _get_embedder().embed_documents(texts)
+    except Exception:
+        return 0
+
     for prop, vector in zip(properties, vectors):
         prop.embedding = vector
     db.commit()
@@ -112,10 +125,11 @@ def search(db: Session, params: PropertySearchParams) -> list[Property]:
 
     if params.semantic_query and get_settings().llm_configured:
         query_vector = embed_text(params.semantic_query)
-        candidates = list(db.scalars(query).all())
-        ranked = _rank_by_embedding(candidates, query_vector, params.limit)
-        if ranked:
-            return ranked
+        if query_vector:
+            candidates = list(db.scalars(query).all())
+            ranked = _rank_by_embedding(candidates, query_vector, params.limit)
+            if ranked:
+                return ranked
 
         fallback = PropertySearchParams(
             **{**params.model_dump(), "keywords": params.semantic_query, "semantic_query": None}
