@@ -1,9 +1,11 @@
 # HomeGuide AI backend
 
-- `main.py` — API + database
+Flat layout — two files:
+
+- `main.py` — API, database, RentCast import
 - `agent.py` — chat agent
-- `fetch_data.py` — import real listings + zip market stats from RentCast
-- `data.py` — mock listings (fallback)
+
+All listing and market data comes from the [RentCast API](https://app.rentcast.io).
 
 ## Run
 
@@ -12,37 +14,24 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env   # add GOOGLE_API_KEY and RENTCAST_API_KEY
 
 uvicorn main:app --reload
 ```
 
-## Real data import
+On first start, if the database is empty, listings are imported automatically for `DEFAULT_CITY` / `DEFAULT_STATE`.
 
-Add to `.env`:
-
-```env
-RENTCAST_API_KEY=your-rentcast-key
-USE_MOCK_DATA=false
-```
-
-Get a key at https://app.rentcast.io
-
-Import:
+## Import more listings
 
 ```bash
-python fetch_data.py Austin TX 20
+curl -X POST "http://127.0.0.1:8000/listings/import?city=Austin&state=TX&limit=20"
 ```
 
-This fetches:
-- **Listings** from RentCast (address, price, beds, baths, sqft, property type, year built, days on market, etc.)
-- **ZIP market stats** into neighborhood info (median price, days on market, property-type breakdown)
+Or from the command line:
 
-Ask the agent about a ZIP code, e.g. *"How's the 78723 market?"*
-
-## Mock data
-
-Leave `USE_MOCK_DATA=true` to use sample listings in `data.py`.
+```bash
+python main.py Austin TX 20
+```
 
 ## Frontend
 
@@ -53,5 +42,5 @@ cd frontend && npm install && npm run dev
 ## Test
 
 ```bash
-pytest
+PYTHONPATH=. pytest
 ```

@@ -1,52 +1,76 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from fetch_data import market_to_neighborhood, rentcast_to_row
-from main import app, engine, search_listings, seed_db, Session, get_neighborhood
+from main import (
+    Session,
+    app,
+    engine,
+    get_neighborhood,
+    import_listings,
+    market_to_neighborhood,
+    rentcast_to_row,
+    search_listings,
+)
+
+SAMPLE_LISTING = {
+    "id": "test-listing-1",
+    "addressLine1": "100 Test St",
+    "formattedAddress": "100 Test St, Austin, TX 78701",
+    "city": "Austin",
+    "state": "TX",
+    "zipCode": "78701",
+    "propertyType": "Condo",
+    "bedrooms": 2,
+    "bathrooms": 2,
+    "squareFootage": 900,
+    "yearBuilt": 2010,
+    "price": 500000,
+    "status": "Active",
+}
 
 
 @pytest.fixture()
 def client():
-    seed_db()
     with TestClient(app) as test_client:
         yield test_client
+
+
+def _import_sample(monkeypatch, listings=None):
+    listings = listings or [SAMPLE_LISTING]
+    monkeypatch.setattr("main.fetch_sale_listings", lambda city, state, limit: listings)
+    monkeypatch.setattr(
+        "main.fetch_market_stats",
+        lambda zip_code: {
+            "zipCode": zip_code,
+            "saleData": {"medianPrice": 550000, "averageDaysOnMarket": 30, "totalListings": 50},
+        },
+    )
+    return import_listings("Austin", "TX", limit=len(listings))
 
 
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_search_listings():
-    seed_db()
-    with Session(engine) as db:
-        results = search_listings(db, city="Austin", max_price=800000)
-    assert results
-    assert all(p.city == "Austin" for p in results)
-
-
 def test_rentcast_to_row():
     row = rentcast_to_row(
         {
+            **SAMPLE_LISTING,
             "id": "3821-Hargis-St,-Austin,-TX-78723",
             "addressLine1": "3821 Hargis St",
             "formattedAddress": "3821 Hargis St, Austin, TX 78723",
-            "city": "Austin",
-            "state": "TX",
             "zipCode": "78723",
             "propertyType": "Single Family",
             "bedrooms": 4,
             "bathrooms": 2.5,
             "squareFootage": 2345,
-            "yearBuilt": 2008,
-            "price": 899000,
-            "status": "Active",
             "daysOnMarket": 12,
+            "price": 899000,
         }
     )
     assert row["neighborhood"] == "78723"
     assert row["beds"] == 4
     assert "12 days on market" in row["description"]
-    assert "walk_score" not in row
 
 
 def test_market_to_neighborhood():
@@ -67,31 +91,20 @@ def test_market_to_neighborhood():
     assert hood["name"] == "78723"
     assert hood["median_price"] == 650000
     assert "78723" in hood["summary"]
-    assert "walk_score" not in hood
+
+
+def test_search_listings(monkeypatch):
+    _import_sample(monkeypatch)
+    with Session(engine) as db:
+        results = search_listings(db, city="Austin", max_price=800000)
+    assert len(results) == 1
+    assert results[0].city == "Austin"
 
 
 def test_import_listings_endpoint(client, monkeypatch):
-    sample = [
-        {
-            "id": "test-listing-1",
-            "addressLine1": "100 Test St",
-            "formattedAddress": "100 Test St, Austin, TX 78701",
-            "city": "Austin",
-            "state": "TX",
-            "zipCode": "78701",
-            "propertyType": "Condo",
-            "bedrooms": 2,
-            "bathrooms": 2,
-            "squareFootage": 900,
-            "yearBuilt": 2010,
-            "price": 500000,
-            "status": "Active",
-        }
-    ]
-
-    monkeypatch.setattr("fetch_data.fetch_sale_listings", lambda city, state, limit: sample)
+    monkeypatch.setattr("main.fetch_sale_listings", lambda city, state, limit: [SAMPLE_LISTING])
     monkeypatch.setattr(
-        "fetch_data.fetch_market_stats",
+        "main.fetch_market_stats",
         lambda zip_code: {
             "zipCode": zip_code,
             "saleData": {"medianPrice": 550000, "averageDaysOnMarket": 30, "totalListings": 50},
@@ -103,7 +116,6 @@ def test_import_listings_endpoint(client, monkeypatch):
     body = response.json()
     assert body["message"] == "Imported 1 listings"
     assert body["neighborhoods"] == 1
-    assert "walk_scores" not in body
 
     with Session(engine) as db:
         results = search_listings(db, city="Austin")

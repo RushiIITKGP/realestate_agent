@@ -1,24 +1,30 @@
 import json
 import os
+import sys
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import httpx
-from sqlalchemy import JSON, Float, Integer, String, Text, create_engine, func, or_, select
+from sqlalchemy import JSON, Float, Integer, String, Text, create_engine, delete, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
-
-from data import NEIGHBORHOODS, PROPERTIES
 
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/realestate.db")
-USE_MOCK_DATA = os.getenv("USE_MOCK_DATA", "true").lower() == "true"
+RENTCAST_API_KEY = os.getenv("RENTCAST_API_KEY")
+DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Austin")
+DEFAULT_STATE = os.getenv("DEFAULT_STATE", "TX")
+DEFAULT_IMPORT_LIMIT = int(os.getenv("DEFAULT_IMPORT_LIMIT", "20"))
+AUTO_IMPORT = os.getenv("AUTO_IMPORT", "true").lower() == "true"
+
+LISTINGS_URL = "https://api.rentcast.io/v1/listings/sale"
+MARKETS_URL = "https://api.rentcast.io/v1/markets"
 
 Path(DATABASE_URL.replace("sqlite:///", "", 1)).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -64,17 +70,165 @@ class Neighborhood(Base):
 Base.metadata.create_all(engine)
 
 
-def seed_db() -> None:
+def _property_type(raw: str | None) -> str:
+    value = (raw or "").lower()
+    if "condo" in value:
+        return "condo"
+    if "town" in value:
+        return "townhouse"
+    return "house"
+
+
+def fetch_sale_listings(city: str, state: str, limit: int = 20) -> list[dict]:
+    if not RENTCAST_API_KEY:
+        raise ValueError("Set RENTCAST_API_KEY in backend/.env (https://app.rentcast.io)")
+
+    response = httpx.get(
+        LISTINGS_URL,
+        params={"city": city, "state": state, "status": "Active", "limit": limit},
+        headers={"X-Api-Key": RENTCAST_API_KEY},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, list):
+        raise ValueError(f"Unexpected RentCast response: {data}")
+    return data
+
+
+def fetch_market_stats(zip_code: str) -> dict | None:
+    if not RENTCAST_API_KEY:
+        return None
+
+    response = httpx.get(
+        MARKETS_URL,
+        params={"zipCode": zip_code, "dataType": "Sale"},
+        headers={"X-Api-Key": RENTCAST_API_KEY},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def rentcast_to_row(item: dict) -> dict:
+    beds = int(item.get("bedrooms") or 0)
+    baths = float(item.get("bathrooms") or 0)
+    sqft = int(item.get("squareFootage") or 0)
+    price = int(item.get("price") or 0)
+    city = item.get("city") or ""
+    state = item.get("state") or ""
+    zip_code = item.get("zipCode") or ""
+    prop_type = item.get("propertyType") or "Home"
+
+    description = (
+        f"{prop_type} for sale in {city}, {state}. "
+        f"{beds} bedrooms, {baths} baths, {sqft:,} sqft. "
+        f"Listed at ${price:,}."
+    )
+    if item.get("daysOnMarket"):
+        description += f" {item['daysOnMarket']} days on market."
+
+    features = [prop_type]
+    if item.get("lotSize"):
+        features.append(f"lot {item['lotSize']:,} sqft")
+    if item.get("yearBuilt"):
+        features.append(f"built {item['yearBuilt']}")
+
+    return {
+        "id": item["id"],
+        "address": item.get("addressLine1") or item.get("formattedAddress") or "Unknown",
+        "city": city,
+        "state": state,
+        "zip": zip_code,
+        "price": price,
+        "beds": beds,
+        "baths": baths,
+        "sqft": sqft,
+        "property_type": _property_type(prop_type),
+        "year_built": int(item.get("yearBuilt") or 0),
+        "description": description,
+        "features": features,
+        "neighborhood": zip_code or item.get("county") or "Area",
+        "status": "for_sale",
+    }
+
+
+def market_to_neighborhood(market: dict, city: str, state: str) -> dict:
+    zip_code = market.get("zipCode") or market.get("id") or ""
+    sale = market.get("saleData") or {}
+    median = int(sale.get("medianPrice") or 0)
+    avg_dom = sale.get("averageDaysOnMarket")
+    total = sale.get("totalListings")
+    avg_ppsf = sale.get("averagePricePerSquareFoot")
+
+    summary = f"ZIP {zip_code} market in {city}, {state}. Median list price ${median:,}."
+    if avg_dom is not None:
+        summary += f" Average {avg_dom:.0f} days on market."
+    if total is not None:
+        summary += f" {total} active listings in this zip."
+
+    highlights = []
+    if avg_ppsf:
+        highlights.append(f"${avg_ppsf:.0f}/sqft average")
+    for row in (sale.get("dataByPropertyType") or [])[:3]:
+        median_type = row.get("medianPrice")
+        if median_type:
+            highlights.append(f"{row.get('propertyType')}: ${int(median_type):,} median")
+
+    return {
+        "id": f"zip-{zip_code}",
+        "name": zip_code,
+        "city": city,
+        "state": state,
+        "summary": summary,
+        "median_price": median,
+        "highlights": highlights,
+    }
+
+
+def import_listings(city: str, state: str, limit: int = 20, replace: bool = True) -> dict:
+    listings = fetch_sale_listings(city, state, limit)
+    rows = [rentcast_to_row(item) for item in listings]
+
+    zip_meta: dict[str, tuple[str, str]] = {}
+    for item in listings:
+        z = item.get("zipCode")
+        if z:
+            zip_meta[z] = (item.get("city") or city, item.get("state") or state)
+
+    markets: dict[str, dict] = {}
+    for zip_code, (zip_city, zip_state) in zip_meta.items():
+        try:
+            market = fetch_market_stats(zip_code)
+            if market:
+                markets[zip_code] = market
+        except httpx.HTTPError:
+            continue
+
+    with Session(engine) as db:
+        if replace:
+            db.execute(delete(Property))
+            db.execute(delete(Neighborhood))
+
+        for row in rows:
+            db.merge(Property(**row))
+
+        for zip_code, market in markets.items():
+            zip_city, zip_state = zip_meta[zip_code]
+            db.merge(Neighborhood(**market_to_neighborhood(market, zip_city, zip_state)))
+
+        db.commit()
+
+    return {"listings": len(rows), "neighborhoods": len(markets)}
+
+
+def ensure_listings() -> None:
     with Session(engine) as db:
         if db.scalar(select(func.count()).select_from(Property)):
             return
-        if not USE_MOCK_DATA:
-            return
-        for row in PROPERTIES:
-            db.add(Property(**row))
-        for row in NEIGHBORHOODS:
-            db.add(Neighborhood(**row))
-        db.commit()
+    if not RENTCAST_API_KEY:
+        return
+    import_listings(DEFAULT_CITY, DEFAULT_STATE, limit=DEFAULT_IMPORT_LIMIT)
 
 
 def search_listings(
@@ -137,8 +291,6 @@ def listing_card(prop: Property) -> dict:
     }
 
 
-seed_db()
-
 app = FastAPI(title="HomeGuide AI")
 app.add_middleware(
     CORSMiddleware,
@@ -147,6 +299,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def load_listings_on_startup():
+    if AUTO_IMPORT:
+        ensure_listings()
 
 
 class ChatRequest(BaseModel):
@@ -161,15 +319,12 @@ def health():
 
 @app.post("/listings/import")
 def import_real_listings(city: str = "Austin", state: str = "TX", limit: int = 20):
-    """Fetch real for-sale listings from RentCast into the database."""
-    from fetch_data import import_listings
-
     try:
         result = import_listings(city=city, state=state, limit=limit, replace=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Data import failed: {exc}") from exc
+        raise HTTPException(502, f"RentCast import failed: {exc}") from exc
 
     return {
         "message": f"Imported {result['listings']} listings",
@@ -183,6 +338,8 @@ def import_real_listings(city: str = "Austin", state: str = "TX", limit: int = 2
 def chat_stream(body: ChatRequest):
     if not GOOGLE_API_KEY:
         raise HTTPException(503, "Set GOOGLE_API_KEY in backend/.env")
+    if not RENTCAST_API_KEY:
+        raise HTTPException(503, "Set RENTCAST_API_KEY in backend/.env")
 
     from agent import stream_chat
 
@@ -195,3 +352,11 @@ def chat_stream(body: ChatRequest):
                 yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+if __name__ == "__main__":
+    city = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CITY
+    state = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_STATE
+    limit = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_IMPORT_LIMIT
+    result = import_listings(city, state, limit=limit)
+    print(f"Imported {result['listings']} listings, {result['neighborhoods']} zip markets")
