@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import httpx
 from sqlalchemy import JSON, Float, Integer, String, Text, create_engine, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -17,6 +18,7 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/realestate.db")
+USE_MOCK_DATA = os.getenv("USE_MOCK_DATA", "true").lower() == "true"
 
 Path(DATABASE_URL.replace("sqlite:///", "", 1)).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -30,7 +32,7 @@ class Base(DeclarativeBase):
 class Property(Base):
     __tablename__ = "properties"
 
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
     address: Mapped[str] = mapped_column(String(255))
     city: Mapped[str] = mapped_column(String(100))
     state: Mapped[str] = mapped_column(String(2))
@@ -72,6 +74,8 @@ Base.metadata.create_all(engine)
 def seed_db() -> None:
     with Session(engine) as db:
         if db.scalar(select(func.count()).select_from(Property)):
+            return
+        if not USE_MOCK_DATA:
             return
         for row in PROPERTIES:
             db.add(Property(**row))
@@ -158,6 +162,21 @@ class ChatRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/listings/import")
+def import_real_listings(city: str = "Austin", state: str = "TX", limit: int = 20):
+    """Fetch real for-sale listings from RentCast into the database."""
+    from fetch_data import import_listings
+
+    try:
+        count = import_listings(city=city, state=state, limit=limit, replace=True)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"RentCast request failed: {exc}") from exc
+
+    return {"message": f"Imported {count} listings", "city": city, "state": state}
 
 
 @app.post("/chat/stream")
