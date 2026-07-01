@@ -1,444 +1,271 @@
-# Homes AI–Style Project — Process Diagrams
+# HomeGuide AI — Architecture & Process Diagrams
 
-Backend-focused process diagrams for building a conversational real estate assistant similar to [Homes.com Homes AI](https://www.homes.com).
-
-These diagrams cover system architecture, request flows, agent logic, search, memory, streaming, deployment, and error handling.
+Diagrams for the current project: flat `main.py` + `agent.py`, RentCast data, Gemini chat, SQLite, SSE streaming.
 
 ---
 
-## 1. High-Level System Architecture
+## 1. System architecture
 
 ```mermaid
 flowchart TB
-    subgraph Client["Client Layer (later)"]
-        UI[Web / Mobile / CLI / Swagger]
+    subgraph Frontend["Frontend (Vite / custom UI)"]
+        ChatUI[Chat UI]
+        Session[session_id in localStorage]
     end
 
-    subgraph API["FastAPI Backend"]
-        REST[REST Endpoints]
-        SSE[SSE Stream Endpoint]
-        WS[WebSocket Endpoint - optional]
-        Auth[Auth Middleware - optional]
+    subgraph Backend["Backend (FastAPI)"]
+        Main[main.py]
+        Agent[agent.py]
     end
 
-    subgraph Agent["LangGraph Agent Layer"]
-        Graph[LangGraph State Machine]
-        LLM[LLM - GPT-4o / Claude]
-        Tools[Tool Router]
-        Memory[Checkpointer / Session Memory]
+    subgraph AgentLayer["LangGraph Agent"]
+        Gemini[Google Gemini LLM]
+        Tools[5 Tools]
+        Checkpoint[Session Memory]
     end
 
-    subgraph Services["Domain Services"]
-        SearchSvc[Property Search Service]
-        NeighborhoodSvc[Neighborhood Service]
-        CompareSvc[Compare Service]
-        EmbedSvc[Embedding Service - optional]
+    subgraph Data["Local SQLite"]
+        RE[(realestate.db)]
+        CP[(checkpoints.db)]
     end
 
-    subgraph Data["Data Layer"]
-        PG[(PostgreSQL)]
-        PGV[pgvector - semantic search]
-        Redis[(Redis - sessions/cache)]
-        S3[(S3/R2 - images - optional)]
+    subgraph External["External APIs"]
+        RC[RentCast API]
+        GE[Google Embeddings API]
     end
 
-    subgraph External["External APIs (optional)"]
-        OpenAI[OpenAI API]
-        Maps[Mapbox / Geocoding]
-        MLS[MLS / RESO API - production]
-    end
+    ChatUI -->|POST /chat/stream SSE| Main
+    Session --> ChatUI
 
-    subgraph Observability["Observability"]
-        LangSmith[LangSmith Traces]
-    end
+    Main --> Agent
+    Agent --> Gemini
+    Agent --> Tools
+    Agent --> Checkpoint
 
-    UI --> REST
-    UI --> SSE
-    UI --> WS
+    Tools --> RE
+    Checkpoint --> CP
 
-    REST --> Auth
-    SSE --> Auth
-    WS --> Auth
+    Main -->|import on startup / manual| RC
+    Main -->|index embeddings| GE
+    Gemini -->|chat| Gemini
 
-    Auth --> Graph
-    Graph --> LLM
-    Graph --> Tools
-    Graph --> Memory
-
-    Tools --> SearchSvc
-    Tools --> NeighborhoodSvc
-    Tools --> CompareSvc
-
-    SearchSvc --> PG
-    SearchSvc --> PGV
-    SearchSvc --> EmbedSvc
-    NeighborhoodSvc --> PG
-    CompareSvc --> PG
-
-    Memory --> Redis
-    Memory --> PG
-
-    LLM --> OpenAI
-    EmbedSvc --> OpenAI
-    SearchSvc --> Maps
-    SearchSvc --> MLS
-
-    Graph --> LangSmith
-    LLM --> LangSmith
+    RE --- Props[properties + embeddings]
+    RE --- Hoods[neighborhoods / zip markets]
 ```
 
 ---
 
-## 2. Main User Chat Flow (Backend Core)
-
-This is the primary loop to build first.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as User / CLI / Swagger
-    participant API as FastAPI /chat
-    participant CP as Checkpointer
-    participant Graph as LangGraph Agent
-    participant LLM as LLM
-    participant Tools as Tool Executor
-    participant DB as PostgreSQL
-
-    User->>API: POST /chat<br/>{session_id, message}
-    API->>CP: Load conversation state<br/>for session_id
-    CP-->>API: Prior messages + preferences
-
-    API->>Graph: Invoke graph with new user message
-    Graph->>LLM: System prompt + history + user message
-
-    alt LLM decides to call tools
-        LLM-->>Graph: Tool call(s)<br/>e.g. search_properties(...)
-        Graph->>Tools: Execute tool
-        Tools->>DB: SQL / vector / geo query
-        DB-->>Tools: Structured results
-        Tools-->>Graph: Tool output JSON
-        Graph->>LLM: Tool results + continue reasoning
-        LLM-->>Graph: Final natural language answer
-    else LLM answers directly
-        LLM-->>Graph: Clarifying question or direct reply
-    end
-
-    Graph->>CP: Save updated state<br/>(history, preferences, last results)
-    Graph-->>API: Assistant response + property IDs
-    API-->>User: JSON response<br/>{message, properties[], session_id}
-```
-
----
-
-## 3. LangGraph Agent Internal Flow
-
-How the agent graph should be structured.
-
-```mermaid
-flowchart TD
-    Start([User Message Received]) --> LoadState[Load Session State<br/>from Checkpointer]
-
-    LoadState --> ParsePrefs[Extract / Update Preferences<br/>budget, city, beds, lifestyle]
-
-    ParsePrefs --> AgentNode[Agent Node<br/>LLM with tools]
-
-    AgentNode --> Decision{LLM output?}
-
-    Decision -->|Tool calls| ToolNode[Tool Execution Node]
-    Decision -->|Direct reply| FormatReply[Format Assistant Response]
-    Decision -->|Needs clarification| AskUser[Generate Clarifying Question]
-
-    ToolNode --> ToolType{Which tool?}
-
-    ToolType -->|search_properties| Search[Property Search Service]
-    ToolType -->|get_property_details| Details[Get Listing by ID]
-    ToolType -->|get_neighborhood_info| Hood[Neighborhood Service]
-    ToolType -->|compare_properties| Compare[Compare Service]
-
-    Search --> ToolResult[Normalize Tool Result]
-    Details --> ToolResult
-    Hood --> ToolResult
-    Compare --> ToolResult
-
-    ToolResult --> MoreTools{More tools<br/>needed?}
-    MoreTools -->|Yes| AgentNode
-    MoreTools -->|No| AgentNode
-
-    AskUser --> SaveState[Save State to Checkpointer]
-    FormatReply --> SaveState
-
-    SaveState --> End([Return Response to API])
-```
-
----
-
-## 4. Property Search Tool Flow
-
-What happens inside `search_properties`.
+## 2. Project structure
 
 ```mermaid
 flowchart LR
-    Input[Tool Input<br/>city, maxPrice, minBeds,<br/>keywords, neighborhood] --> Validate[Validate & Normalize<br/>Pydantic schema]
+    subgraph Repo["realestate_agent/"]
+        subgraph BE["backend/"]
+            MP[main.py<br/>API · DB · RentCast · embeddings]
+            AG[agent.py<br/>LangGraph · tools · SSE stream]
+            DB[data/realestate.db]
+            CK[data/checkpoints.db]
+        end
+        subgraph FE["frontend/"]
+            HTML[index.html]
+            JS[src/main.js<br/>reference SSE client]
+        end
+        HOOK[FRONTEND_HANDOFF.md]
+    end
 
-    Validate --> ParseNL{Natural language<br/>keywords present?}
-
-    ParseNL -->|Yes| Embed[Generate query embedding]
-    ParseNL -->|No| SQLOnly[Structured SQL filters only]
-
-    Embed --> Hybrid[Hybrid Search]
-    SQLOnly --> SQL[SQLAlchemy Query]
-
-    Hybrid --> SQL
-    Hybrid --> Vector[pgvector similarity search]
-
-    SQL --> Filter[Apply filters:<br/>price, beds, baths,<br/>city, type, status]
-    Vector --> Filter
-
-    Filter --> Geo{Location radius<br/>or map bounds?}
-    Geo -->|Yes| PostGIS[PostGIS spatial filter]
-    Geo -->|No| Rank[Rank & limit results]
-
-    PostGIS --> Rank
-    Rank --> Format[Format listing summaries<br/>id, address, price, beds,<br/>neighborhood, highlights]
-    Format --> Return[Return JSON to Agent]
-
-    Return --> Agent[LLM interprets results<br/>and writes user-facing answer]
+    MP --> DB
+    AG --> CK
+    AG --> MP
+    FE -->|HTTP SSE| MP
 ```
+
+| File | Role |
+|------|------|
+| `main.py` | FastAPI app, SQLite models, RentCast import, embedding index, search functions |
+| `agent.py` | Gemini agent, tools, streams events to frontend |
+| `realestate.db` | Listings, zip market stats, embedding vectors |
+| `checkpoints.db` | Multi-turn chat memory per `session_id` |
+| `frontend/` | Reference chat UI (replaceable) |
 
 ---
 
-## 5. Multi-Turn Conversation & Memory Flow
-
-How the agent remembers and refines preferences across turns.
-
-```mermaid
-stateDiagram-v2
-    [*] --> NewSession: First message
-
-    NewSession --> CollectingPrefs: User vague<br/>"looking for a family home"
-
-    CollectingPrefs --> CollectingPrefs: Agent asks clarifiers<br/>"Which city? Budget?"
-    CollectingPrefs --> Searching: Enough prefs known
-
-    Searching --> PresentResults: Tool returns listings
-    PresentResults --> Refining: User adjusts<br/>"cheaper" / "more walkable"
-    Refining --> Searching: Updated filters
-
-    PresentResults --> DetailView: User asks about one home<br/>"tell me about #3"
-    DetailView --> Compare: User asks<br/>"compare top two"
-    Compare --> PresentResults
-
-    PresentResults --> CollectingPrefs: User changes city entirely
-    PresentResults --> [*]: User ends session
-
-    note right of CollectingPrefs
-        State stores:
-        - message history
-        - budget range
-        - location
-        - beds/baths
-        - last result IDs
-        - rejected preferences
-    end note
-```
-
----
-
-## 6. Streaming Response Flow (SSE)
-
-Token streaming without a full frontend.
+## 3. Chat process flow
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor User as User / CLI
-    participant API as FastAPI /chat/stream
-    participant Graph as LangGraph Agent
-    participant LLM as LLM Stream
-    participant Tools as Tools
+    actor User
+    participant UI as Frontend
+    participant API as main.py
+    participant Agent as agent.py
+    participant LLM as Google Gemini
+    participant DB as realestate.db
+    participant Mem as checkpoints.db
 
-    User->>API: POST /chat/stream
-    API->>Graph: Start graph run (async)
+    User->>UI: Type message
+    UI->>API: POST /chat/stream<br/>{session_id, message}
 
-    loop Token stream
-        Graph->>LLM: Stream completion
-        LLM-->>API: token chunk
-        API-->>User: SSE event: text delta
+    API->>Agent: stream_chat(db, session_id, message)
+    Agent->>Mem: Load chat history (thread_id)
+
+    Agent-->>UI: SSE status "Thinking..."
+    Agent->>LLM: User message + tools
+
+    alt Needs search
+        LLM->>Agent: Call tool
+        Agent-->>UI: SSE status "Searching Austin..."
+        Agent->>DB: SQL or semantic search
+        DB-->>Agent: Listings
+        Agent->>LLM: Tool result (JSON)
     end
 
-    alt Tool call mid-stream
-        LLM-->>Graph: tool_call event
-        API-->>User: SSE event: tool_started
-        Graph->>Tools: Execute search
-        Tools-->>Graph: Results
-        API-->>User: SSE event: properties_found
-        Graph->>LLM: Continue with tool output
+    loop Stream tokens
+        LLM-->>Agent: Text chunk
+        Agent-->>UI: SSE text chunk
     end
 
-    Graph-->>API: Final structured payload
-    API-->>User: SSE event: done<br/>{properties, session_id}
+    Agent-->>UI: SSE properties [cards]
+    Agent-->>UI: SSE done
+    Agent->>Mem: Save updated history
+    UI->>User: Show text + property cards
 ```
 
 ---
 
-## 7. Backend-Only Development Phases
-
-Suggested build order mapped to the diagrams above.
+## 4. Data import process
 
 ```mermaid
 flowchart TD
-    P1[Phase 1: Data Foundation]
-    P2[Phase 2: REST + Search]
-    P3[Phase 3: LangGraph Agent]
-    P4[Phase 4: Memory + Multi-turn]
-    P5[Phase 5: Streaming SSE]
-    P6[Phase 6: Semantic Search]
-    P7[Phase 7: Voice / Realtime - optional]
+    Start([Startup or manual import]) --> Empty{DB has listings?}
+    Empty -->|No| Auto[RentCast: fetch listings + zip markets]
+    Empty -->|Yes| Missing{Missing embeddings?}
+    Missing -->|Yes| Embed[Index embeddings via Gemini]
+    Missing -->|No| Ready([Ready for chat])
+    Auto --> Save[Save to realestate.db]
+    Save --> Embed
+    Embed --> Ready
 
-    P1 --> P1a[SQLAlchemy models]
-    P1 --> P1b[Seed mock listings]
-    P1 --> P1c[Alembic migrations]
+    Manual[python main.py City ST 100<br/>or POST /listings/import] --> RC[RentCast API]
+    RC --> Save
 
-    P2 --> P2a[GET /properties]
-    P2 --> P2b[Search service with filters]
-    P2 --> P2c[Swagger testing]
-
-    P3 --> P3a[Define tools]
-    P3 --> P3b[LangGraph graph]
-    P3 --> P3c[POST /chat JSON response]
-
-    P4 --> P4a[Checkpointer]
-    P4 --> P4b[Session preferences in state]
-    P4 --> P4c[CLI test loop]
-
-    P5 --> P5a[StreamingResponse / SSE]
-    P5 --> P5b[Tool events in stream]
-
-    P6 --> P6a[Embeddings pipeline]
-    P6 --> P6b[pgvector hybrid search]
-
-    P7 --> P7a[Realtime session endpoint]
-    P7 --> P7b[Tool webhook for voice agent]
-
-    P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7
+    Replace{replace=True?}
+    Manual --> Replace
+    Replace -->|Yes| Wipe[Delete all listings first]
+    Replace -->|No| Merge[Add / update listings]
+    Wipe --> RC
+    Merge --> RC
 ```
+
+**RentCast provides:** listings (address, price, beds, baths, sqft, etc.) + zip-level market stats.
+
+**On import:** each listing gets an embedding (`gemini-embedding-001`) stored in SQLite for vibe/similar search.
 
 ---
 
-## 8. Docker / Runtime Deployment Flow
-
-How services run together locally.
-
-```mermaid
-flowchart TB
-    subgraph DockerCompose["docker-compose (local dev)"]
-        subgraph AppContainer["app container"]
-            FastAPI[FastAPI + Uvicorn]
-            Agent[LangGraph Agent]
-        end
-
-        subgraph DataContainers["data containers"]
-            Postgres[(PostgreSQL + pgvector)]
-            Redis[(Redis)]
-        end
-    end
-
-    Dev[Developer / CLI / Swagger] -->|:8000| FastAPI
-    FastAPI --> Agent
-    Agent --> Postgres
-    Agent --> Redis
-    Agent --> OpenAI[OpenAI API - external]
-
-    Seed[Seed Script] --> Postgres
-    Migrate[Alembic Migrate] --> Postgres
-```
-
----
-
-## 9. Error & Fallback Flow
-
-How the backend should behave when things go wrong.
+## 5. Agent tool routing
 
 ```mermaid
 flowchart TD
-    Request[Incoming /chat request] --> Valid{Valid session<br/>& message?}
-    Valid -->|No| E400[400 Bad Request]
-    Valid -->|Yes| RunAgent[Run LangGraph]
+    UserMsg[User message] --> LLM[Gemini decides tool]
 
-    RunAgent --> ToolCall[Tool execution]
-    ToolCall --> Results{Results found?}
+    LLM -->|filters only<br/>city, price, beds| T1[search_properties<br/>SQL filters]
+    LLM -->|vibe / style language| T2[search_properties_semantic<br/>embedding search]
+    LLM -->|same vibe as listing X| T3[find_similar_properties<br/>cosine similarity]
+    LLM -->|one listing id| T4[get_property_details]
+    LLM -->|zip / area market| T5[get_neighborhood_info]
 
-    Results -->|Yes| Success[LLM summarizes listings]
-    Results -->|No| Relax[LLM suggests relaxing one filter]
-    Results -->|DB error| E500[500 + log to Sentry]
+    T1 --> DB[(realestate.db)]
+    T2 --> DB
+    T3 --> DB
+    T4 --> DB
+    T5 --> DB
 
-    RunAgent --> LLMFail{LLM timeout / error?}
-    LLMFail -->|Yes| Retry[Retry once]
-    Retry --> LLMFail2{Still failing?}
-    LLMFail2 -->|Yes| Fallback[Return friendly error message]
-    LLMFail2 -->|No| Success
+    DB --> LLM
+    LLM --> Reply[Stream text + property cards]
+```
 
-    Success --> Response[200 + message + properties]
-    Relax --> Response
-    Fallback --> Response
+| User says | Tool used |
+|-----------|-----------|
+| "Homes in Austin under $800k" | `search_properties` |
+| "Modern minimalist condo under 600k in Austin" | `search_properties_semantic` |
+| "Same vibe as the 2nd listing" | `find_similar_properties` |
+| "Tell me more about listing X" | `get_property_details` |
+| "How's the 78723 market?" | `get_neighborhood_info` |
+
+---
+
+## 6. Search types
+
+```mermaid
+flowchart LR
+    subgraph SQL["search_properties"]
+        F1[city filter]
+        F2[max price]
+        F3[min beds]
+        F4[keyword LIKE]
+    end
+
+    subgraph Semantic["search_properties_semantic"]
+        Q1[Embed user query]
+        Q2[Cosine similarity vs listing embeddings]
+        Q3[Optional city + price filters]
+    end
+
+    subgraph Similar["find_similar_properties"]
+        S1[Load reference listing embedding]
+        S2[Rank other listings by similarity]
+    end
+
+    SQL --> Results[Listings]
+    Semantic --> Results
+    Similar --> Results
 ```
 
 ---
 
-## 10. One-Page Summary (ASCII)
+## 7. SSE events to frontend
 
-```
-┌──────────────┐     POST /chat      ┌──────────────┐
-│ User / CLI   │ ──────────────────► │   FastAPI    │
-│ Swagger      │ ◄────────────────── │   Backend    │
-└──────────────┘   JSON / SSE stream └──────┬───────┘
-                                            │
-                                            ▼
-                                   ┌────────────────┐
-                                   │   LangGraph    │
-                                   │   Agent Graph  │
-                                   └───────┬────────┘
-                                           │
-                         ┌─────────────────┼─────────────────┐
-                         ▼                 ▼                 ▼
-                    ┌─────────┐      ┌───────────┐     ┌──────────┐
-                    │   LLM   │      │   Tools   │     │ Checkptr │
-                    │ OpenAI  │      │ search    │     │ SQLite/  │
-                    └─────────┘      │ details   │     │ Postgres │
-                                       │ neighbor  │     └──────────┘
-                                       │ compare   │
-                                       └─────┬─────┘
-                                             ▼
-                                    ┌─────────────────┐
-                                    │ Property Search │
-                                    │   Service       │
-                                    └────────┬────────┘
-                                             ▼
-                                    ┌─────────────────┐
-                                    │   PostgreSQL    │
-                                    │ + pgvector      │
-                                    └─────────────────┘
+```mermaid
+flowchart LR
+    API[POST /chat/stream] --> E1[status<br/>Searching...]
+    E1 --> E2[text<br/>streamed chunks]
+    E2 --> E3[properties<br/>listing cards]
+    E3 --> E4[done]
+    API -.->|on failure| E5[error]
 ```
 
 ---
 
-## Recommended Starting Point (Backend Only)
+## 8. Deployment view (typical dev)
 
-Focus on **Diagrams 2, 3, and 4** first:
+```mermaid
+flowchart LR
+    Dev[Developer laptop]
 
-1. User sends message → FastAPI
-2. LangGraph decides → call tools or ask clarifying questions
-3. Tools query PostgreSQL → return structured listings
-4. LLM writes the final answer → save session → respond
+    subgraph Ports
+        P1[:5173 Frontend]
+        P2[:8000 Backend]
+    end
 
-That gives you the core Homes AI loop without any frontend.
+    subgraph Local
+        DB1[realestate.db]
+        DB2[checkpoints.db]
+    end
+
+    Dev --> P1
+    Dev --> P2
+    P1 -->|VITE_API_URL| P2
+    P2 --> DB1
+    P2 --> DB2
+    P2 --> RentCast[RentCast cloud]
+    P2 --> Google[Google Gemini cloud]
+```
+
+Remote frontend dev: runs backend locally on their machine **or** points `VITE_API_URL` at a deployed/tunnel URL.
 
 ---
 
-## Related Documentation
+## Related docs
 
-- [TECH_STACK_LEARNING.md](./TECH_STACK_LEARNING.md) — Full tech stack learning roadmap
-
----
-
-*Last updated: June 2025*
+- [README.md](README.md) — quick start
+- [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md) — frontend spec
+- [backend/README.md](backend/README.md) — backend setup & import
